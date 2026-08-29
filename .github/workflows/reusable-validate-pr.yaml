@@ -1,0 +1,66 @@
+name: Reusable - Validar Pull Request
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-pr:
+    name: validate-pr
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Validar nome da branch
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          PATTERN='^(feat|fix|refactor|chore|test|docs)/[a-zA-Z]{4}-[0-9]{1,4}$'
+          if [[ ! "$HEAD_REF" =~ $PATTERN ]]; then
+            echo "::error::Nome de branch inválido: '$HEAD_REF'."
+            echo "::error::Padrão esperado: (feat|fix|refactor|chore|test|docs)/NN-descricao"
+            exit 1
+          fi
+          echo "Nome de branch OK: $HEAD_REF"
+
+      - name: Validar branch base do PR
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          # Caso 1: hotfix criado a partir de main pode voltar direto para main
+          if [[ "$HEAD_REF" == fix/* && "$BASE_REF" == "main" ]]; then
+            echo "Hotfix permitido: $HEAD_REF -> $BASE_REF"
+            exit 0
+          fi
+
+          # Caso 2: qualquer branch de feature só pode mirar develop
+          if [[ "$HEAD_REF" =~ ^(feat|fix|refactor|chore|test|docs)/ && "$BASE_REF" != "develop" ]]; then
+            echo "::error::Branches de feature só podem abrir PR para 'develop'."
+            echo "::error::Recebido: $HEAD_REF -> $BASE_REF"
+            exit 1
+          fi
+
+          # Caso 3: develop só pode ser promovida para main
+          if [[ "$HEAD_REF" == "develop" && "$BASE_REF" != "main" ]]; then
+            echo "::error::'develop' só pode abrir PR para 'main'."
+            echo "::error::Recebido: $HEAD_REF -> $BASE_REF"
+            exit 1
+          fi
+
+          echo "Base do PR OK: $HEAD_REF -> $BASE_REF"
+
+      - name: Validar título do PR (Conventional Commits)
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          PATTERN='^(feat|fix|refactor|chore|test|docs)(\([a-z0-9.-]+\))?: .+'
+          if [[ ! "$PR_TITLE" =~ $PATTERN ]]; then
+            echo "::error::Título do PR fora do padrão Conventional Commits."
+            echo "::error::Recebido: '$PR_TITLE'"
+            echo "::error::Esperado, por exemplo: 'feat: adiciona endpoint de login'"
+            exit 1
+          fi
+          echo "Título do PR OK: $PR_TITLE"

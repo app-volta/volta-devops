@@ -1,0 +1,102 @@
+name: Reusable - Deploy no Render
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: Environment do GitHub (qa ou prod)
+        required: true
+        type: string
+      image-name:
+        description: Nome da imagem no GHCR (ex.- api)
+        required: true
+        type: string
+      image-tag:
+        description: Tag imutável a implantar (ex.- sha-a1b2c3d)
+        required: true
+        type: string
+      health-url:
+        description: URL do health check do serviço
+        required: true
+        type: string
+      health-retries:
+        description: Número de tentativas do smoke test
+        required: false
+        type: number
+        default: 30
+    secrets:
+      render-deploy-hook:
+        description: URL do deploy hook do serviço no Render
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+
+    concurrency:
+      group: deploy-${{ inputs.image-name }}-${{ inputs.environment }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Disparar deploy no Render
+        env:
+          HOOK: ${{ secrets.render-deploy-hook }}
+          OWNER: ${{ github.repository_owner }}
+          IMAGE_NAME: ${{ inputs.image-name }}
+          IMAGE_TAG: ${{ inputs.image-tag }}
+        run: |
+          IMAGE="ghcr.io/${OWNER}/${IMAGE_NAME}:${IMAGE_TAG}"
+          IMAGE="${IMAGE,,}"
+          IMAGE_ENC=$(printf '%s' "$IMAGE" | jq -sRr @uri)
+
+          echo "Implantando: ${IMAGE}"
+
+          HTTP_CODE=$(curl -sS -o /tmp/render.out -w '%{http_code}' \
+            -X POST "${HOOK}&imgURL=${IMAGE_ENC}")
+
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "::error::Render recusou o deploy (HTTP ${HTTP_CODE})."
+            cat /tmp/render.out
+            exit 1
+          fi
+
+          echo "Deploy aceito pelo Render (HTTP ${HTTP_CODE})."
+
+      - name: Smoke test do health check
+        env:
+          HEALTH_URL: ${{ inputs.health-url }}
+          RETRIES: ${{ inputs.health-retries }}
+        run: |
+          echo "Aguardando ${HEALTH_URL} responder..."
+          for i in $(seq 1 "$RETRIES"); do
+            if curl -fsS --max-time 10 "$HEALTH_URL" > /dev/null; then
+              echo "Serviço saudável na tentativa ${i}."
+              exit 0
+            fi
+            echo "Tentativa ${i}/${RETRIES} sem resposta. Aguardando 10s..."
+            sleep 10
+          done
+
+          echo "::error::Serviço não respondeu ao health check após ${RETRIES} tentativas."
+          exit 1
+
+      - name: Registrar resumo da implantação
+        if: always()
+        run: |
+          {
+            echo "### Deploy — ${{ inputs.environment }}"
+            echo ""
+            echo "| Campo | Valor |"
+            echo "|---|---|"
+            echo "| Serviço | \`${{ inputs.image-name }}\` |"
+            echo "| Tag implantada | \`${{ inputs.image-tag }}\` |"
+            echo "| Ambiente | \`${{ inputs.environment }}\` |"
+            echo "| Commit | \`${{ github.sha }}\` |"
+            echo "| Disparado por | @${{ github.actor }} |"
+            echo "| Resultado | ${{ job.status }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
