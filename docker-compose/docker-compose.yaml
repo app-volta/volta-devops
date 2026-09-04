@@ -1,0 +1,69 @@
+name: volta
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: volta-postgres
+    environment:
+      POSTGRES_DB: volta
+      POSTGRES_USER: volta
+      POSTGRES_PASSWORD: volta_local
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U volta -d volta"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongo:
+    image: mongo:7
+    container_name: volta-mongo
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: volta
+      MONGO_INITDB_ROOT_PASSWORD: volta_local
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ../../volta-api
+    container_name: volta-api
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/volta
+      SPRING_DATASOURCE_USERNAME: volta
+      SPRING_DATASOURCE_PASSWORD: volta_local
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+      CHATBOT_BASE_URL: http://chatbot:8000
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  chatbot:
+    build:
+      context: ../../volta-chatbot
+    container_name: volta-chatbot
+    env_file:
+      - .env
+    environment:
+      MONGO_URI: mongodb://volta:volta_local@mongo:27017/volta?authSource=admin
+    ports:
+      - "8000:8000"
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  mongo-data:
