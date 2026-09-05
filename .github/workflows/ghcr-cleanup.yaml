@@ -1,0 +1,30 @@
+name: Limpeza do GHCR
+
+on:
+  schedule:
+    - cron: '0 6 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    name: cleanup
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [api, chatbot]
+
+    steps:
+      - name: Remover versões sem tag de ${{ matrix.package }}
+        uses: actions/delete-package-versions@v5
+        with:
+          owner: ${{ github.repository_owner }}
+          package-name: ${{ matrix.package }}
+          package-type: container
+          delete-only-untagged-versions: true
+          min-versions-to-keep: 10
+          token: ${{ secrets.GHCR_CLEANUP_TOKEN }}
