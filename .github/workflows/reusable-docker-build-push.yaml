@@ -4,11 +4,7 @@ on:
   workflow_call:
     inputs:
       image-name:
-        description: Nome da imagem no GHCR (ex.- api, chatbot)
-        required: true
-        type: string
-      environment:
-        description: Ambiente alvo (qa ou prod). Define o prefixo da tag.
+        description: Nome da imagem no GHCR
         required: true
         type: string
       context:
@@ -22,30 +18,18 @@ on:
         type: string
         default: ./Dockerfile
       push:
-        description: Se falso, apenas constrói (sem publicar e sem notificar o DevOps)
+        description: Se falso, apenas constrói (sem publicar)
         required: false
         type: boolean
         default: true
-      notify-devops:
-        description: Se verdadeiro, dispara repository_dispatch para o repositório DevOps
-        required: false
-        type: boolean
-        default: true
-      devops-repository:
-        description: Repositório DevOps que recebe o repository_dispatch
+      moving-tag:
+        description: Tag móvel adicional (qa ou latest). Vazio para nenhuma.
         required: false
         type: string
-        default: app-volta/volta-devops
-    secrets:
-      devops-dispatch-token:
-        description: PAT com escopo de escrita no repositório DevOps (necessário para notify-devops)
-        required: false
+        default: ''
     outputs:
-      image:
-        description: Nome completo da imagem (sem tag)
-        value: ${{ jobs.docker.outputs.image }}
       image-tag:
-        description: Tag imutável gerada (ex.- qa-a1b2c3d)
+        description: Tag imutável gerada (sha-xxxxxxx)
         value: ${{ jobs.docker.outputs.image-tag }}
 
 jobs:
@@ -58,22 +42,9 @@ jobs:
       packages: write
 
     outputs:
-      image: ${{ steps.meta.outputs.image }}
       image-tag: ${{ steps.meta.outputs.image-tag }}
 
     steps:
-      - name: Validar ambiente informado
-        env:
-          ENVIRONMENT: ${{ inputs.environment }}
-        run: |
-          case "$ENVIRONMENT" in
-            qa|prod) echo "Ambiente OK: $ENVIRONMENT" ;;
-            *)
-              echo "::error::Ambiente inválido: '$ENVIRONMENT'. Use 'qa' ou 'prod'."
-              exit 1
-              ;;
-          esac
-
       - name: Checkout do código
         uses: actions/checkout@v4
 
@@ -82,21 +53,21 @@ jobs:
         env:
           OWNER: ${{ github.repository_owner }}
           IMAGE_NAME: ${{ inputs.image-name }}
-          ENVIRONMENT: ${{ inputs.environment }}
+          MOVING_TAG: ${{ inputs.moving-tag }}
           COMMIT_SHA: ${{ github.sha }}
         run: |
           SHORT_SHA="${COMMIT_SHA:0:7}"
           IMAGE="ghcr.io/${OWNER}/${IMAGE_NAME}"
           IMAGE="${IMAGE,,}"
 
-          IMAGE_TAG="${ENVIRONMENT}-${SHORT_SHA}"
-
-          # Tag imutável (usada no deploy) + tag móvel do ambiente (conveniência)
-          TAGS="${IMAGE}:${IMAGE_TAG},${IMAGE}:${ENVIRONMENT}"
+          TAGS="${IMAGE}:sha-${SHORT_SHA}"
+          if [ -n "$MOVING_TAG" ]; then
+            TAGS="${TAGS},${IMAGE}:${MOVING_TAG}"
+          fi
 
           {
             echo "image=${IMAGE}"
-            echo "image-tag=${IMAGE_TAG}"
+            echo "image-tag=sha-${SHORT_SHA}"
             echo "tags=${TAGS}"
           } >> "$GITHUB_OUTPUT"
 
@@ -128,48 +99,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Notificar o repositório DevOps
-        if: inputs.push && inputs.notify-devops
-        env:
-          DISPATCH_TOKEN: ${{ secrets.devops-dispatch-token }}
-          DEVOPS_REPO: ${{ inputs.devops-repository }}
-          SERVICE: ${{ inputs.image-name }}
-          ENVIRONMENT: ${{ inputs.environment }}
-          IMAGE: ${{ steps.meta.outputs.image }}
-          IMAGE_TAG: ${{ steps.meta.outputs.image-tag }}
-        run: |
-          if [ -z "$DISPATCH_TOKEN" ]; then
-            echo "::error::Secret 'devops-dispatch-token' não informado, mas notify-devops está ativo."
-            exit 1
-          fi
-
-          PAYLOAD=$(jq -nc \
-            --arg service "$SERVICE" \
-            --arg env "$ENVIRONMENT" \
-            --arg image "$IMAGE" \
-            --arg tag "$IMAGE_TAG" \
-            --arg sha "$GITHUB_SHA" \
-            --arg repo "$GITHUB_REPOSITORY" \
-            '{event_type: "deploy", client_payload: {
-               service: $service, env: $env, image: $image,
-               tag: $tag, commit: $sha, source_repository: $repo
-             }}')
-
-          HTTP_CODE=$(curl -sS -o /tmp/dispatch.out -w '%{http_code}' \
-            -X POST "https://api.github.com/repos/${DEVOPS_REPO}/dispatches" \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${DISPATCH_TOKEN}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            -d "$PAYLOAD")
-
-          if [ "$HTTP_CODE" != "204" ]; then
-            echo "::error::repository_dispatch falhou (HTTP ${HTTP_CODE})."
-            cat /tmp/dispatch.out
-            exit 1
-          fi
-
-          echo "DevOps notificado: ${SERVICE} / ${ENVIRONMENT} / ${IMAGE_TAG}"
-
       - name: Registrar resumo da publicação
         if: inputs.push
         run: |
@@ -180,8 +109,6 @@ jobs:
             echo "|---|---|"
             echo "| Imagem | \`${{ steps.meta.outputs.image }}\` |"
             echo "| Tag imutável | \`${{ steps.meta.outputs.image-tag }}\` |"
-            echo "| Tag móvel | \`${{ inputs.environment }}\` |"
-            echo "| Ambiente | \`${{ inputs.environment }}\` |"
+            echo "| Tag móvel | \`${{ inputs.moving-tag || 'nenhuma' }}\` |"
             echo "| Commit | \`${{ github.sha }}\` |"
-            echo "| DevOps notificado | ${{ inputs.notify-devops && 'sim' || 'não' }} |"
           } >> "$GITHUB_STEP_SUMMARY"
