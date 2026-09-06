@@ -1,0 +1,40 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Tudo que este overlay gerar vai para o namespace de produção.
+namespace: volta-prod
+
+resources:
+  - ../../base
+  - configmap.yaml
+
+commonLabels:
+  environment: prod
+  app.kubernetes.io/part-of: volta
+
+# Versão das imagens implantadas em produção.
+# O workflow de deploy altera estas linhas com:
+#   kustomize edit set image ghcr.io/app-volta/api=ghcr.io/app-volta/api:prod-a1b2c3d
+images:
+  - name: ghcr.io/app-volta/api
+    newTag: prod
+  - name: ghcr.io/app-volta/chatbot
+    newTag: prod
+
+patches:
+  # Mais recursos que a base (aplica-se a api e chatbot)
+  - path: resources-patch.yaml
+    target:
+      kind: Deployment
+
+  # Hosts de produção (sem o segmento .qa). SUBSTITUA 0.0.0.0 PELO ELASTIC IP.
+  - target:
+      kind: Ingress
+      name: volta
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: api.0.0.0.0.sslip.io
+      - op: replace
+        path: /spec/rules/1/host
+        value: chat.0.0.0.0.sslip.io

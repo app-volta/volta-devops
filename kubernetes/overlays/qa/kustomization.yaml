@@ -1,0 +1,40 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Tudo que este overlay gerar vai para o namespace de QA.
+namespace: volta-qa
+
+resources:
+  - ../../base
+  - configmap.yaml
+
+commonLabels:
+  environment: qa
+  app.kubernetes.io/part-of: volta
+
+# Versão das imagens implantadas em QA.
+# O workflow de deploy altera estas linhas com:
+#   kustomize edit set image ghcr.io/app-volta/api=ghcr.io/app-volta/api:qa-a1b2c3d
+images:
+  - name: ghcr.io/app-volta/api
+    newTag: qa
+  - name: ghcr.io/app-volta/chatbot
+    newTag: qa
+
+patches:
+  # QA desligado por padrão (aplica-se a api e chatbot)
+  - path: replicas-patch.yaml
+    target:
+      kind: Deployment
+
+  # Hosts de QA. SUBSTITUA 0.0.0.0 PELO ELASTIC IP DA INSTÂNCIA.
+  - target:
+      kind: Ingress
+      name: volta
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: api.qa.0.0.0.0.sslip.io
+      - op: replace
+        path: /spec/rules/1/host
+        value: chat.qa.0.0.0.0.sslip.io
