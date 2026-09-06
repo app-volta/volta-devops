@@ -1,0 +1,39 @@
+# Porta de entrada do cluster: recebe o tráfego vindo da internet e decide qual
+# serviço responde, com base no nome do host chamado.
+#
+# O Traefik já vem embutido no k3s — não é preciso instalar ingress controller.
+#
+# O host aqui é um PLACEHOLDER. Cada overlay substitui `0.0.0.0` pelo Elastic IP
+# real da instância (veja overlays/qa/kustomization.yaml e overlays/prod/).
+# O sslip.io resolve qualquer IP embutido no próprio nome, o que dispensa
+# comprar domínio: 34.201.10.5.sslip.io aponta para 34.201.10.5.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: volta
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: api.0.0.0.0.sslip.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  number: 8080
+
+    - host: chat.0.0.0.0.sslip.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: chatbot
+                port:
+                  number: 8000
