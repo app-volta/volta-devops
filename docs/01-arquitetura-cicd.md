@@ -626,7 +626,7 @@ ci.yml       jobs: validate-pr | build-test (scripts em Postgres efêmero)
 ├── reusable-docker-build-push.yaml   (workflow_call)
 ├── reusable-k3s-deploy.yaml          (workflow_call)      — pendente
 ├── dispatch-deploy.yaml              (repository_dispatch) — pendente
-├── ec2-start.yaml                    (workflow_dispatch)   — pendente
+├── ec2-power.yaml                    (workflow_dispatch)
 ├── ci.yaml                           (lint de YAML e do Compose)
 └── ghcr-cleanup.yaml                 (schedule mensal + workflow_dispatch)
 ```
@@ -1155,7 +1155,7 @@ DevOps/
 │   │   ├── reusable-docker-build-push.yaml
 │   │   ├── reusable-k3s-deploy.yaml      # pendente
 │   │   ├── dispatch-deploy.yaml          # pendente — recebe repository_dispatch
-│   │   ├── ec2-start.yaml                # pendente — sobe a instância sob demanda
+│   │   ├── ec2-power.yaml                # sobe/para a instância sob demanda
 │   │   ├── ci.yaml
 │   │   └── ghcr-cleanup.yaml
 │   ├── CODEOWNERS
@@ -1181,7 +1181,9 @@ DevOps/
 │   └── configuracao-website.md
 ├── scripts/
 │   ├── setup-local.sh
-│   ├── provision-k3s.sh         # bootstrap da EC2
+│   ├── lib-aws.sh               # convenções compartilhadas
+│   ├── provision-ec2-k3s.sh     # provisionamento idempotente (roda local)
+│   ├── cloud-init-k3s.sh        # user data: instala o k3s
 │   ├── apply-manifests.sh
 │   ├── deploy-k3s.sh
 │   ├── rollback.sh
