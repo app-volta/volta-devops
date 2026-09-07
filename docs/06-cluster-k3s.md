@@ -77,8 +77,11 @@ Duas configurações manuais no GitHub, uma vez só:
 1. **Settings → Secrets and variables → Actions → New repository secret**:
    nome `SSH_PRIVATE_KEY`, valor = todo o conteúdo do arquivo
    `~/.ssh/volta-k3s.pem` (incluindo as linhas de início e fim).
-2. Nos Environments `qa` e `prod` (**Settings → Environments**): uma variable
-   `SSH_HOST` = o Elastic IP que o script imprimiu.
+2. **Settings → Secrets and variables → Actions → Variables → New variable**:
+   nome `SSH_HOST`, valor = o Elastic IP que o script imprimiu.
+
+   É variable de **repositório**, não de Environment: existe um cluster só, com
+   um IP só — QA e produção são namespaces dentro dele.
 
 O primeiro boot leva ~3 minutos (instala pacotes, baixa o k3s, cria os
 namespaces). Acompanhe com:
@@ -134,6 +137,29 @@ máquina leva ~1 minuto para subir, o Kubernetes mais um pouco, o ambiente de QA
 precisa ser "acordado" (fica desligado por padrão para economizar memória) e o
 banco de dados (Neon) também demora um pouco mais no primeiro acesso depois de
 um período parado.
+
+---
+
+## Deploy e rollback
+
+**Deploy** acontece sozinho: ao mergear em `develop` ou `main`, o repositório da
+aplicação publica a imagem e avisa este repositório, que aplica no cluster.
+
+Para reimplantar uma versão antiga sem rebuild: **Actions → "Deploy" → Run
+workflow**, informando serviço, ambiente e a tag (`prod-a1b2c3d`).
+
+**Rollback de emergência** é script local, de propósito — quando algo caiu, você
+não quer depender do GitHub estar no ar nem esperar a pipeline:
+
+```bash
+./scripts/rollback.sh prod api                 # volta uma revisão
+./scripts/rollback.sh prod api prod-a1b2c3d    # volta para uma tag exata
+./scripts/rollback.sh prod api --history       # só lista as revisões
+```
+
+> Depois de um rollback pelo script, o cluster fica **divergente do Git**. Assim
+> que a poeira baixar, reimplante a mesma tag pela pipeline para reconciliar —
+> o script imprime o comando pronto no fim.
 
 ---
 
@@ -214,6 +240,9 @@ nenhum do Git, por decisão de segurança registrada na seção 17 da arquitetur
 | `scripts/provision-ec2-k3s.sh` | Provisionamento idempotente completo — roda local, uma vez |
 | `scripts/cloud-init-k3s.sh` | User data: instala k3s, kustomize e cria os namespaces no primeiro boot |
 | `.github/workflows/ec2-power.yaml` | Botão do dia a dia: liga, desliga e mostra status do cluster |
+| `.github/workflows/dispatch-deploy.yaml` | Recebe o aviso de imagem nova e dispara o deploy |
+| `.github/workflows/reusable-k3s-deploy.yaml` | Aplica os manifestos no cluster e espera o rollout |
+| `scripts/rollback.sh` | Rollback de emergência, direto no cluster |
 
 Variáveis de ambiente reconhecidas pelos scripts: `AWS_REGION`,
 `INSTANCE_NAME`, `INSTANCE_TYPE`, `VOLUME_SIZE_GB`, `KEY_NAME`, `KEY_FILE`,
