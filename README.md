@@ -40,6 +40,7 @@ Código → CI → imagem no GHCR (<env>-<sha>) → repository_dispatch
 | `reusable-validate-pr.yaml` | Valida nome da branch, base do PR e título em Conventional Commits |
 | `reusable-docker-build-push.yaml` | Build, push no GHCR e `repository_dispatch` para este repositório |
 | `ghcr-cleanup.yaml` | Limpeza mensal de versões sem tag |
+| `ec2-power.yaml` | Liga, desliga e inspeciona a EC2 do cluster (`workflow_dispatch`) |
 
 Uso a partir de um repositório de aplicação:
 
@@ -54,8 +55,26 @@ jobs:
       devops-dispatch-token: ${{ secrets.DEVOPS_DISPATCH_TOKEN }}
 ```
 
+## Operar o cluster
+
+A máquina é criada **uma única vez**, rodando o script abaixo localmente (fica
+versionado aqui para documentar exatamente como o cluster foi provisionado):
+
+```bash
+./scripts/provision-ec2-k3s.sh    # cria o cluster do zero (idempotente)
+```
+
+Ligar, desligar e verificar o estado, no dia a dia, é só pela interface do
+GitHub, no workflow **"Ligar e desligar o cluster"**
+(`Actions` → escolher `start`, `stop` ou `status` → *Run workflow*).
+
+A instância para sozinha após ~15 min sem tráfego de rede. Passo a passo
+completo e diagnóstico em [`docs/06-cluster-k3s.md`](docs/06-cluster-k3s.md).
+
 ## Documentação
 
 - [`docs/01-arquitetura-cicd.md`](docs/01-arquitetura-cicd.md) — arquitetura de
   CI/CD completa: branches, rulesets, ambientes, GHCR, deploy, secrets e as
   comparações que sustentam cada decisão.
+- [`docs/06-cluster-k3s.md`](docs/06-cluster-k3s.md) — runbook do cluster:
+  provisionamento, operação, custo e diagnóstico.

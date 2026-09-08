@@ -624,9 +624,9 @@ ci.yml       jobs: validate-pr | build-test (scripts em Postgres efêmero)
 .github/workflows/
 ├── reusable-validate-pr.yaml         (workflow_call)
 ├── reusable-docker-build-push.yaml   (workflow_call)
-├── reusable-k3s-deploy.yaml          (workflow_call)      — pendente
-├── dispatch-deploy.yaml              (repository_dispatch) — pendente
-├── ec2-start.yaml                    (workflow_dispatch)   — pendente
+├── reusable-k3s-deploy.yaml          (workflow_call)
+├── dispatch-deploy.yaml              (repository_dispatch + workflow_dispatch)
+├── ec2-power.yaml                    (workflow_dispatch)
 ├── ci.yaml                           (lint de YAML e do Compose)
 └── ghcr-cleanup.yaml                 (schedule mensal + workflow_dispatch)
 ```
@@ -692,26 +692,47 @@ cross-repo. É preciso um PAT com escrita no DevOps, no secret
 `devops-dispatch-token`; o workflow falha explicitamente se ele estiver
 ausente.
 
-### 11.3 `reusable-k3s-deploy.yaml` *(pendente — SCRUM-1861/1862)*
+### 11.3 `reusable-k3s-deploy.yaml`
 
 Substitui o antigo `reusable-render-deploy.yml`, removido junto com o Render.
 
 ```yaml
-inputs:   environment, service, image, image-tag, health-url, health-retries
-secrets:  ssh-private-key, ssh-host, ssh-user
+inputs:   environment, service, image, image-tag, health-url, rollout-timeout
+secrets:  ssh-private-key, ssh-host
 ```
 
-Responsabilidades previstas:
+Declara `environment: ${{ inputs.environment }}` — é esse job que fica parado
+esperando a aprovação em produção. Em ordem:
 
-1. `kustomize edit set image <service>=<image>:<tag>` no overlay do ambiente;
+1. `kustomize edit set image` no overlay do ambiente;
 2. commit e push do overlay no próprio DevOps (o Git vira o histórico do que
    está implantado);
-3. SSH na EC2 e `kubectl apply -k kubernetes/overlays/<env>`;
-4. `kubectl rollout status` e smoke test no health check;
-5. resumo da implantação no `GITHUB_STEP_SUMMARY`.
+3. `scp` da pasta `kubernetes/` para a instância — o runner já tem o commit
+   exato em mãos, o que evita a instância ficar dessincronizada;
+4. `kubectl apply -k kubernetes/overlays/<env>`;
+5. `kubectl rollout status` — só retorna sucesso quando a readiness probe passa,
+   e é essa a verificação real de que a aplicação subiu;
+6. smoke test opcional pelo ingress, que valida o caminho completo (Traefik →
+   Service → pod) que o `rollout status` sozinho não cobre.
 
-Declara `environment: ${{ inputs.environment }}` — é esse job que fica parado
-esperando a aprovação em produção.
+Quando o Deployment está com `replicas: 0` (o padrão em QA), os passos 5 e 6 são
+pulados com um aviso: a imagem fica registrada no manifesto e sobe quando
+alguém escalar.
+
+### 11.3.1 `dispatch-deploy.yaml`
+
+Ponto de entrada do deploy, com dois gatilhos:
+
+- **`repository_dispatch`** (tipo `deploy`) — automático, disparado pelos
+  repositórios de aplicação logo após publicarem a imagem;
+- **`workflow_dispatch`** — manual, para reimplantar uma tag antiga sem rebuild.
+  É o caminho de rollback pela interface.
+
+O payload do dispatch vem de fora deste repositório, então nada nele é usado sem
+validação: serviço e ambiente conferidos contra uma lista fechada, tag conferida
+contra o padrão `<env>-<sha7>`, e — o check que mais importa — **o prefixo da
+tag precisa bater com o ambiente alvo**, o que impede implantar uma imagem de QA
+em produção.
 
 ### 11.4 `ghcr-cleanup.yml`
 
@@ -831,7 +852,7 @@ container. São boas práticas corporativas que não geram ação acionável aqu
 | Informação | Classificação | Onde fica |
 |---|---|---|
 | `SSH_PRIVATE_KEY` | **Secret de repositório** | GitHub (DevOps) |
-| `SSH_HOST` (Elastic IP) | Variable de Environment | GitHub (DevOps) |
+| `SSH_HOST` (Elastic IP) | Variable de repositório | GitHub (DevOps) |
 | `DEVOPS_DISPATCH_TOKEN` (PAT) | Secret de repositório | GitHub (repos de app) |
 | `GHCR_CLEANUP_TOKEN` (PAT) | Secret de repositório | GitHub (DevOps) |
 | Senha do Postgres (Neon) | Secret | `Secret` do namespace no k3s |
@@ -1153,9 +1174,9 @@ DevOps/
 │   ├── workflows/
 │   │   ├── reusable-validate-pr.yaml
 │   │   ├── reusable-docker-build-push.yaml
-│   │   ├── reusable-k3s-deploy.yaml      # pendente
-│   │   ├── dispatch-deploy.yaml          # pendente — recebe repository_dispatch
-│   │   ├── ec2-start.yaml                # pendente — sobe a instância sob demanda
+│   │   ├── reusable-k3s-deploy.yaml      # deploy no cluster
+│   │   ├── dispatch-deploy.yaml          # recebe o repository_dispatch
+│   │   ├── ec2-power.yaml                # sobe/para a instância sob demanda
 │   │   ├── ci.yaml
 │   │   └── ghcr-cleanup.yaml
 │   ├── CODEOWNERS
@@ -1181,10 +1202,10 @@ DevOps/
 │   └── configuracao-website.md
 ├── scripts/
 │   ├── setup-local.sh
-│   ├── provision-k3s.sh         # bootstrap da EC2
-│   ├── apply-manifests.sh
-│   ├── deploy-k3s.sh
-│   ├── rollback.sh
+│   ├── lib-aws.sh               # convenções compartilhadas
+│   ├── provision-ec2-k3s.sh     # provisionamento idempotente (roda local)
+│   ├── cloud-init-k3s.sh        # user data: instala o k3s
+│   ├── rollback.sh              # rollback de emergência
 │   └── check-health.sh
 │
 ├── docs/
