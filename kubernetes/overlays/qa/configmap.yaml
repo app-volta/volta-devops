@@ -16,6 +16,16 @@ data:
 apiVersion: v1
 kind: ConfigMap
 metadata:
+  name: api-redis-config
+data:
+  SPRING_PROFILES_ACTIVE: "qa"
+  SERVER_PORT: "8081"
+  LOGGING_LEVEL_ROOT: "INFO"
+  LOGGING_LEVEL_APP: "DEBUG"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
   name: chatbot-config
 data:
   ENVIRONMENT: "qa"
