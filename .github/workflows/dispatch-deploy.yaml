@@ -1,0 +1,144 @@
+name: Deploy
+
+# Ponto de entrada do deploy. Dois gatilhos:
+#
+#   1. repository_dispatch — automático. Os repositórios de aplicação disparam
+#      logo depois de publicar a imagem no GHCR (veja
+#      reusable-docker-build-push.yaml no repositório de origem).
+#
+#   2. workflow_dispatch — manual. Para reimplantar uma tag antiga sem precisar
+#      de rebuild: é o caminho de rollback pela interface do GitHub.
+
+on:
+  repository_dispatch:
+    types: [deploy]
+
+  workflow_dispatch:
+    inputs:
+      service:
+        description: Serviço a implantar
+        required: true
+        type: choice
+        options: [api, chatbot]
+      environment:
+        description: Ambiente alvo
+        required: true
+        type: choice
+        options: [qa, prod]
+      image-tag:
+        description: Tag imutável (ex.- qa-a1b2c3d). Deve existir no GHCR.
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  resolve:
+    name: resolve
+    runs-on: ubuntu-latest
+
+    outputs:
+      service: ${{ steps.payload.outputs.service }}
+      environment: ${{ steps.payload.outputs.environment }}
+      image: ${{ steps.payload.outputs.image }}
+      image-tag: ${{ steps.payload.outputs.image-tag }}
+      health-url: ${{ steps.payload.outputs.health-url }}
+
+    steps:
+      - name: Normalizar a origem do gatilho
+        id: payload
+        env:
+          # repository_dispatch
+          D_SERVICE: ${{ github.event.client_payload.service }}
+          D_ENV: ${{ github.event.client_payload.env }}
+          D_IMAGE: ${{ github.event.client_payload.image }}
+          D_TAG: ${{ github.event.client_payload.tag }}
+          # workflow_dispatch
+          W_SERVICE: ${{ inputs.service }}
+          W_ENV: ${{ inputs.environment }}
+          W_TAG: ${{ inputs.image-tag }}
+          # comum
+          OWNER: ${{ github.repository_owner }}
+          CLUSTER_IP: ${{ vars.SSH_HOST }}
+        run: |
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            SERVICE="$D_SERVICE"; ENVIRONMENT="$D_ENV"; TAG="$D_TAG"; IMAGE="$D_IMAGE"
+          else
+            SERVICE="$W_SERVICE"; ENVIRONMENT="$W_ENV"; TAG="$W_TAG"
+            IMAGE="ghcr.io/${OWNER}/${SERVICE}"
+            IMAGE="${IMAGE,,}"
+          fi
+
+          # --- Validação do payload -------------------------------------------
+          # O dispatch vem de fora deste repositório: nada do que ele manda pode
+          # ser usado sem conferir.
+          case "$SERVICE" in
+            api|chatbot) ;;
+            *) echo "::error::Serviço inválido: '${SERVICE}'. Aceitos: api, chatbot."; exit 1 ;;
+          esac
+
+          case "$ENVIRONMENT" in
+            qa|prod) ;;
+            *) echo "::error::Ambiente inválido: '${ENVIRONMENT}'. Aceitos: qa, prod."; exit 1 ;;
+          esac
+
+          if [ -z "$TAG" ]; then
+            echo "::error::Tag da imagem não informada."
+            exit 1
+          fi
+
+          if ! printf '%s' "$TAG" | grep -Eq '^(qa|prod)-[0-9a-f]{7}$'; then
+            echo "::error::Tag fora do padrão esperado '<env>-<sha7>': '${TAG}'."
+            exit 1
+          fi
+
+          if [ "${TAG%%-*}" != "$ENVIRONMENT" ]; then
+            echo "::error::A tag '${TAG}' não pertence ao ambiente '${ENVIRONMENT}'."
+            echo "::error::Implantar imagem de QA em produção é exatamente o que este check impede."
+            exit 1
+          fi
+
+          # --- URL do smoke test ----------------------------------------------
+          # Precisa casar com os hosts declarados no ingress dos overlays.
+          if [ -z "$CLUSTER_IP" ]; then
+            echo "::warning::Variable SSH_HOST não configurada — smoke test será pulado."
+            HEALTH_URL=""
+          else
+            case "$SERVICE" in
+              api)     PREFIX="api";  HEALTH_PATH="/actuator/health" ;;
+              chatbot) PREFIX="chat"; HEALTH_PATH="/health" ;;
+            esac
+
+            if [ "$ENVIRONMENT" = "qa" ]; then
+              HOST="${PREFIX}.qa.${CLUSTER_IP}.sslip.io"
+            else
+              HOST="${PREFIX}.${CLUSTER_IP}.sslip.io"
+            fi
+
+            HEALTH_URL="http://${HOST}${HEALTH_PATH}"
+          fi
+
+          {
+            echo "service=${SERVICE}"
+            echo "environment=${ENVIRONMENT}"
+            echo "image=${IMAGE}"
+            echo "image-tag=${TAG}"
+            echo "health-url=${HEALTH_URL}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Implantar ${IMAGE}:${TAG} como '${SERVICE}' em '${ENVIRONMENT}'."
+
+  deploy:
+    name: deploy
+    needs: resolve
+    uses: ./.github/workflows/reusable-k3s-deploy.yaml
+    with:
+      environment: ${{ needs.resolve.outputs.environment }}
+      service: ${{ needs.resolve.outputs.service }}
+      image: ${{ needs.resolve.outputs.image }}
+      image-tag: ${{ needs.resolve.outputs.image-tag }}
+      health-url: ${{ needs.resolve.outputs.health-url }}
+    secrets:
+      ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+      ssh-host: ${{ vars.SSH_HOST }}
