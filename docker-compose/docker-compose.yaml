@@ -4,6 +4,7 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: volta-postgres
+    restart: unless-stopped
     environment:
       POSTGRES_DB: volta
       POSTGRES_USER: volta
@@ -21,6 +22,7 @@ services:
   mongo:
     image: mongo:7
     container_name: volta-mongo
+    restart: unless-stopped
     environment:
       MONGO_INITDB_ROOT_USERNAME: volta
       MONGO_INITDB_ROOT_PASSWORD: volta_local
@@ -38,30 +40,44 @@ services:
     build:
       context: ../../volta-api
     container_name: volta-api
+    restart: unless-stopped
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/volta
       SPRING_DATASOURCE_USERNAME: volta
       SPRING_DATASOURCE_PASSWORD: volta_local
-      SPRING_JPA_HIBERNATE_DDL_AUTO: update
-      CHATBOT_BASE_URL: http://chatbot:8000
+      JWT_KEY: ${JWT_KEY}
+      JWT_EXPIRATION: ${JWT_EXPIRATION}
+      MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: health,info
     ports:
       - "8080:8080"
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
 
   chatbot:
     build:
       context: ../../volta-chatbot
     container_name: volta-chatbot
+    restart: unless-stopped
     env_file:
       - .env
     environment:
-      MONGO_URI: mongodb://volta:volta_local@mongo:27017/volta?authSource=admin
+      POSTGRES_DSN: postgresql://volta:volta_local@postgres:5432/volta
+      MONGO_URI: mongodb://volta:volta_local@mongo:27017/volta_memory?authSource=admin
+      ENVIRONMENT: development
+      RAG_BASE_PATH: ./data/faiss
     ports:
       - "8000:8000"
     depends_on:
       mongo:
+        condition: service_healthy
+      api:
         condition: service_healthy
 
 volumes:
