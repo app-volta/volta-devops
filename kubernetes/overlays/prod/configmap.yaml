@@ -31,6 +31,3 @@ data:
   ENVIRONMENT: "prod"
   PORT: "8000"
   LOG_LEVEL: "INFO"
-  # Endereço interno da API dentro do mesmo namespace: o Kubernetes resolve
-  # o nome do Service, sem precisar saber IP de container.
-  API_BASE_URL: "http://api:8080"
