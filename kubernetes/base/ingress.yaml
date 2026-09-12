@@ -27,6 +27,17 @@ spec:
                 port:
                   number: 8080
 
+    - host: ranking.0.0.0.0.sslip.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api-redis
+                port:
+                  number: 8081
+
     - host: chat.0.0.0.0.sslip.io
       http:
         paths:

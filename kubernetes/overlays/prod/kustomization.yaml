@@ -18,6 +18,8 @@ commonLabels:
 images:
   - name: ghcr.io/app-volta/api
     newTag: prod
+  - name: ghcr.io/app-volta/api-redis
+    newTag: prod
   - name: ghcr.io/app-volta/chatbot
     newTag: prod
 
@@ -37,4 +39,7 @@ patches:
         value: api.0.0.0.0.sslip.io
       - op: replace
         path: /spec/rules/1/host
+        value: ranking.0.0.0.0.sslip.io
+      - op: replace
+        path: /spec/rules/2/host
         value: chat.0.0.0.0.sslip.io

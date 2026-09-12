@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [api, chatbot]
+        package: [api, api-redis, chatbot]
 
     steps:
       - name: Remover versões sem tag de ${{ matrix.package }}

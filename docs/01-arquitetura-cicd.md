@@ -177,6 +177,7 @@ várias recomendações da seção 13 em requisitos.
 | Repositório | Produz | CI | CD |
 |---|---|---|---|
 | **API** | `ghcr.io/app-volta/api` | Maven build + testes | k3s QA (auto) / PROD (com aprovação) |
+| **API Redis** | `ghcr.io/app-volta/api-redis` | Maven build + testes | k3s QA (auto) / PROD (com aprovação) |
 | **Mobile** | APK como artifact | Gradle build + testes + lint | — |
 | **Chatbot** | `ghcr.io/app-volta/chatbot` | Ruff + pytest | k3s QA (auto) / PROD (com aprovação) |
 | **Website** | Bundle estático | Lint + tsc + build | Vercel: preview (develop) / produção (main) |
@@ -474,8 +475,8 @@ e quando.
 ### Nomenclatura
 
 ```text
-namespace volta-qa      Services: api, chatbot
-namespace volta-prod    Services: api, chatbot
+namespace volta-qa      Services: api, api-redis, chatbot
+namespace volta-prod    Services: api, api-redis, chatbot
 ```
 
 O nome do Service é igual nos dois namespaces — quem diferencia é o namespace,
@@ -700,6 +701,15 @@ Substitui o antigo `reusable-render-deploy.yml`, removido junto com o Render.
 inputs:   environment, service, image, image-tag, health-url, rollout-timeout
 secrets:  ssh-private-key, ssh-host
 ```
+
+Responsabilidades previstas:
+
+1. `kustomize edit set image <service>=<image>:<tag>` no overlay do ambiente;
+2. commit e push do overlay no próprio DevOps (o Git vira o histórico do que
+   está implantado);
+3. SSH na EC2 e `kubectl apply -k kubernetes/overlays/<env>`;
+4. `kubectl rollout status` e smoke test no health check;
+5. resumo da implantação no `GITHUB_STEP_SUMMARY`.
 
 Declara `environment: ${{ inputs.environment }}` — é esse job que fica parado
 esperando a aprovação em produção. Em ordem:
@@ -1087,8 +1097,8 @@ perde é alta disponibilidade do control plane, que não é requisito aqui.
 ```text
 EC2 t3.medium (Amazon Linux 2023) + Elastic IP
 └── k3s (single-node, Traefik embutido)
-    ├── namespace volta-qa     → api, chatbot   (replicas: 0 por padrão)
-    └── namespace volta-prod   → api, chatbot
+    ├── namespace volta-qa     → api, api-redis, chatbot   (replicas: 0 por padrão)
+    └── namespace volta-prod   → api, api-redis, chatbot
 ```
 
 Sem ELB e sem NAT Gateway — os dois maiores sorvedouros de crédito numa conta
@@ -1099,7 +1109,9 @@ que dispensa comprar domínio e habilita HTTPS via cert-manager:
 
 ```text
 api.qa.<EIP>.sslip.io    → Service api,      namespace volta-qa,   port 8080
-api.<EIP>.sslip.io       → Service api,      namespace volta-prod, port 8080
+api.<EIP>.sslip.io       → Service api,       namespace volta-prod, port 8080
+ranking.qa.<EIP>.sslip.io → Service api-redis, namespace volta-qa,   port 8081
+ranking.<EIP>.sslip.io    → Service api-redis, namespace volta-prod, port 8081
 chat.qa.<EIP>.sslip.io   → Service chatbot,  namespace volta-qa,   port 8000
 chat.<EIP>.sslip.io      → Service chatbot,  namespace volta-prod, port 8000
 ```
@@ -1112,6 +1124,7 @@ kubernetes/
 ├── namespace.yaml            # volta-qa, volta-prod
 ├── base/
 │   ├── api/{deployment,service,kustomization}.yaml
+│   ├── api-redis/{deployment,service,kustomization}.yaml
 │   ├── chatbot/{deployment,service,kustomization}.yaml
 │   └── ingress.yaml
 └── overlays/
@@ -1193,6 +1206,7 @@ DevOps/
 │   ├── namespace.yaml
 │   ├── base/
 │   │   ├── api/
+│   │   ├── api-redis/
 │   │   ├── chatbot/
 │   │   └── ingress.yaml
 │   └── overlays/
