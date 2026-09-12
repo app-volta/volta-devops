@@ -1,7 +1,7 @@
 # Arquitetura de CI/CD — Projeto Volta
 
 > Repositório: `app-volta/DevOps` · Caminho: `docs/01-arquitetura-cicd.md`
-> Versão 3 — revisada após a abertura dos repositórios e a criação do ruleset de organização.
+> Versão 4 — revisada após a migração do Render para Kubernetes (k3s em EC2 do AWS Academy Learner Lab).
 
 ---
 
@@ -11,12 +11,14 @@
 |---|---|
 | **Todos os repositórios públicos** | Proteção de branch, rulesets, Environments e CODEOWNERS disponíveis; minutos de Actions ilimitados |
 | **Ruleset no nível da organização**, mínimo 1 aprovação | Uma configuração vale para todos os repositórios, com exclusão do `volta-landing-page` |
-| **Imagens no GHCR públicas** | Storage gratuito; Render e Compose sem credencial |
-| **API e Chatbot no Render**, **Website na Vercel** | Sem consumo de horas do Render para o front |
-| **Postgres no Neon**, MongoDB no Atlas | Fora do Render, que expira bancos gratuitos em 30 dias |
+| **Imagens no GHCR públicas** | Storage gratuito; cluster e Compose sem credencial de registry |
+| **API e Chatbot em k3s** (EC2 t3.medium), **Website na Vercel** | Kubernetes é requisito da disciplina; o front não consome crédito AWS |
+| **Postgres no Neon**, MongoDB no Atlas | Bancos gerenciados fora do cluster, com branching por ambiente |
+| **Deploy por SSH + `kubectl apply -k`** | O Learner Lab não permite criar roles IAM, o que inviabiliza OIDC |
 
 Requisito acadêmico registrado: o professor de DevOps avalia o uso de **code
-review e Pull Request** com proteção da `main`. Isso eleva a proteção de branch
+review e Pull Request** com proteção da `main`, e exige **Kubernetes** como
+orquestrador em nuvem. Isso eleva a proteção de branch
 de "boa prática" a **entregável avaliado** — ela é parte do trabalho, não
 enfeite da esteira.
 
@@ -40,14 +42,14 @@ enfeite da esteira.
 14. [Estratégia de Docker](#14-estratégia-de-docker)
 15. [Estratégia de Docker Compose](#15-estratégia-de-docker-compose)
 16. [Estratégia de GHCR](#16-estratégia-de-ghcr)
-17. [Deploy: Render e Vercel](#17-deploy-render-e-vercel)
+17. [Deploy: Kubernetes e Vercel](#17-deploy-kubernetes-e-vercel)
 18. [Estrutura de diretórios do DevOps](#18-estrutura-de-diretórios-do-devops)
 19. [Fluxo completo em diagrama](#19-fluxo-completo-em-diagrama)
 20. [Regras de merge](#20-regras-de-merge)
 21. [Estratégia de QA](#21-estratégia-de-qa)
 22. [Estratégia de produção](#22-estratégia-de-produção)
 23. [Comparação das alternativas arquiteturais](#23-comparação-das-alternativas-arquiteturais)
-24. [Evolução futura para Kubernetes](#24-evolução-futura-para-kubernetes)
+24. [Histórico da migração Render → Kubernetes](#24-histórico-da-migração-render--kubernetes)
 25. [Recomendações finais](#25-recomendações-finais)
 
 ---
@@ -64,13 +66,13 @@ enfeite da esteira.
                                 ▼
 ┌──────────────────────────────────────────────────────────────────────┐
 │ PLANO 2 — INFRAESTRUTURA COMPARTILHADA (repositório DevOps)          │
-│  Reusable workflows · Compose · Scripts · render.yaml · Docs         │
+│  Reusable workflows · Compose · Scripts · Manifestos k8s · Docs      │
 └──────────────────────────────────────────────────────────────────────┘
                                 │  publica / aciona
                                 ▼
 ┌──────────────────────────────────────────────────────────────────────┐
 │ PLANO 3 — EXECUÇÃO                                                   │
-│  GHCR (imagens públicas) · Render (API, Chatbot) · Vercel (Website)  │
+│  GHCR (imagens públicas) · k3s/EC2 (API, Chatbot) · Vercel (Website) │
 │  Neon (PostgreSQL) · MongoDB Atlas                                   │
 └──────────────────────────────────────────────────────────────────────┘
 ```
@@ -78,9 +80,11 @@ enfeite da esteira.
 Fluxo do artefato:
 
 ```text
-Código → CI (build + teste) → Imagem Docker → GHCR → Render
-                                                 │
-                                        deploy hook fixando a tag exata
+Código → CI (build + teste) → Imagem Docker → GHCR → repository_dispatch
+                                                        │
+                                              DevOps: kustomize edit set image
+                                                        │
+                                              SSH → kubectl apply -k → k3s
 
 Website: Código → CI → Vercel (preview em develop, produção em main)
 ```
@@ -121,18 +125,19 @@ configuração adicional de acesso.
 
 ### 2.3 Website na Vercel, sem Docker em produção
 
-O Website é um bundle estático. Conteinerizá-lo significaria consumir horas de
-instância do Render, sofrer cold start e manter um `nginx.conf` — sem ganho.
+O Website é um bundle estático. Conteinerizá-lo significaria disputar memória
+com a API e o Chatbot no nó único e manter um `nginx.conf` — sem ganho.
 A Vercel entrega deploy automático, CDN e **preview por Pull Request**, que é
 genuinamente útil para revisar mudança de front-end.
 
 O Dockerfile continua existindo no repositório para o Compose local e para
 demonstrar conteinerização, mas não é o caminho de produção.
 
-### 2.4 O banco não fica no Render
+### 2.4 O banco não fica no cluster
 
-O Postgres gratuito do Render expira 30 dias depois de criado e só permite uma
-instância por workspace — não atravessa um semestre com dois ambientes.
+Rodar Postgres dentro do k3s significaria disputar os 4 GB da t3.medium com as
+aplicações e assumir a responsabilidade por volume, backup e restore — trabalho
+de operação que não agrega nada ao que a disciplina avalia.
 
 **Escolha do grupo: Neon.** O plano gratuito não tem prazo de validade e
 permite múltiplos projetos, cada um com **branching de banco** — um recurso que
@@ -147,19 +152,22 @@ resolve, sem precisar de duas contas nem de dois bancos lógicos manuais, o
 mesmo isolamento que eu tinha desenhado como pendência quando o banco era o
 Aiven.
 
+**Redis** (ranking de cooperativas) e **Neo4j** seguem com hospedagem a
+definir — a decisão é a mesma em espírito: serviço gerenciado fora do nó.
+
 Único ponto de atenção: como o Neon do plano gratuito também aplica
 **scale-to-zero** — a instância de computação hiberna depois de alguns minutos
 sem uso —, o primeiro acesso após um período parado tem uma latência maior
 (volta em segundos, não minutos, mas é perceptível). Vale religar antes de uma
-demonstração, pelo mesmo motivo do Render.
+demonstração, pelo mesmo motivo da EC2.
 
-Para o Chatbot, o Render não oferece MongoDB gerenciado: **MongoDB Atlas M0**
+Para o Chatbot, **MongoDB Atlas M0**
 (gratuito, 512 MB), com dois bancos lógicos — `volta_qa` e `volta_prod`.
 
 ### 2.5 Imagens do GHCR públicas
 
-Storage gratuito, Render sem credencial de registry e Compose funcionando sem
-login. O preço é que **tudo dentro da imagem é público** — o que transforma
+Storage gratuito, k3s puxando imagem sem `imagePullSecret` e Compose
+funcionando sem login. O preço é que **tudo dentro da imagem é público** — o que transforma
 várias recomendações da seção 13 em requisitos.
 
 ---
@@ -168,19 +176,19 @@ várias recomendações da seção 13 em requisitos.
 
 | Repositório | Produz | CI | CD |
 |---|---|---|---|
-| **API** | `ghcr.io/app-volta/api` | Maven build + testes | Render QA (auto) / PROD (com aprovação) |
+| **API** | `ghcr.io/app-volta/api` | Maven build + testes | k3s QA (auto) / PROD (com aprovação) |
 | **Mobile** | APK como artifact | Gradle build + testes + lint | — |
-| **Chatbot** | `ghcr.io/app-volta/chatbot` | Ruff + pytest | Render QA (auto) / PROD (com aprovação) |
+| **Chatbot** | `ghcr.io/app-volta/chatbot` | Ruff + pytest | k3s QA (auto) / PROD (com aprovação) |
 | **Website** | Bundle estático | Lint + tsc + build | Vercel: preview (develop) / produção (main) |
 | **Database** | Scripts SQL + `.drawdb` | Execução em Postgres efêmero | — |
-| **DevOps** | Reusable workflows, Compose, docs | Lint de YAML | — |
+| **DevOps** | Reusable workflows, manifestos k8s, Compose, docs | Lint de YAML | Aplica os manifestos via SSH |
 | **volta-landing-page** | Página do 1º ano | — | Fora do ruleset e desta arquitetura |
 
 Detalhamentos que importam:
 
-**API.** Expõe `/actuator/health` — não é enfeite: é o health check do Render e
-o alvo do smoke test pós-deploy. A porta vem de variável de ambiente
-(`SERVER_PORT`), porque o Render injeta a porta em que o container deve ouvir.
+**API.** Expõe `/actuator/health` — não é enfeite: é o alvo da readiness probe
+do Kubernetes e do smoke test pós-deploy. A porta vem de variável de ambiente
+(`SERVER_PORT`), o que mantém o container portátil entre Compose e cluster.
 
 **Mobile.** Publica o APK de debug como artifact do workflow. Os colegas e o
 professor baixam o app pela aba Actions sem precisar compilar. Não é publicação
@@ -434,11 +442,14 @@ Três detalhes práticos:
 ## 8. Ambientes QA e PROD
 
 ```text
-develop  ──►  Environment "qa"    ──►  Render: volta-<app>-qa    ──►  Neon branch qa / volta_qa
+develop  ──►  Environment "qa"    ──►  namespace volta-qa    ──►  Neon branch qa / volta_qa
                                        Vercel: preview da branch develop
 
-main     ──►  Environment "prod"  ──►  Render: volta-<app>-prod  ──►  Neon branch prod / volta_prod
+main     ──►  Environment "prod"  ──►  namespace volta-prod  ──►  Neon branch prod / volta_prod
                                        Vercel: produção
+
+Um único cluster k3s, dois namespaces. O isolamento é lógico: Secrets,
+ConfigMaps, Services e ResourceQuota independentes por namespace.
 ```
 
 ### Por que GitHub Environments
@@ -446,9 +457,9 @@ main     ──►  Environment "prod"  ──►  Render: volta-<app>-prod  ─
 Com repositórios públicos, os Environments resolvem três problemas sem
 ferramenta extra:
 
-1. **Secrets por ambiente.** `RENDER_DEPLOY_HOOK` existe com o mesmo nome nos
-   dois ambientes, apontando para serviços diferentes. O workflow é um só; o
-   valor muda conforme o `environment:` declarado no job.
+1. **Secrets por ambiente.** `SSH_PRIVATE_KEY` e o host do cluster existem com
+   o mesmo nome nos dois ambientes. O workflow é um só; o valor muda conforme o
+   `environment:` declarado no job.
 2. **Aprovação manual antes de produção.** No environment `prod`, marque
    *Required reviewers*. O deploy fica parado esperando um clique, mesmo com o
    merge em `main` já feito. É o portão de produção.
@@ -460,33 +471,50 @@ Bônus: a aba *Deployments* do repositório passa a mostrar o histórico de
 implantações com commit, autor e horário — documentação automática do que subiu
 e quando.
 
-### Nomenclatura dos serviços
+### Nomenclatura
 
 ```text
-volta-api-qa        volta-api-prod
-volta-chatbot-qa    volta-chatbot-prod
+namespace volta-qa      Services: api, chatbot
+namespace volta-prod    Services: api, chatbot
 ```
 
-### Orçamento de horas do Render
+O nome do Service é igual nos dois namespaces — quem diferencia é o namespace,
+não o nome. Isso mantém os manifestos `base/` idênticos e joga toda a variação
+para os overlays.
 
-O Render concede 750 horas de instância gratuita por mês, por workspace, e
-serviços hibernados não consomem. Como um serviço gratuito hiberna após 15
-minutos sem tráfego, o consumo é proporcional ao uso:
+### Orçamento da EC2
 
-| Cenário | Consumo | Cabe? |
+A t3.medium é cobrada por hora ligada. O EBS de 30 GB (~US$ 2,40/mês) e o
+Elastic IP (~US$ 3,60/mês) são cobrados mesmo com a instância parada.
+
+| Cenário | Custo estimado/mês | Cabe nos US$ 50? |
 |---|---|---|
-| 4 serviços acordados ~2 h/dia | ~240 h | Sim, com folga |
-| 4 serviços acordados ~6 h/dia | ~720 h | No limite |
-| 4 serviços acordados 24/7 | ~2.920 h | **Não — suspensão** |
+| Ligada ~2 h/dia | ~US$ 10 | Sim, com folga |
+| Ligada ~8 h/dia | ~US$ 17 | Sim |
+| Ligada 24/7 | ~US$ 37 | Consome o crédito em ~5 semanas |
 
-Com o Website na Vercel, sobram apenas 4 serviços no Render. Duas regras:
+Três regras:
 
-- **Nunca use serviço de ping/uptime para evitar o cold start.** Isso mantém os
-  containers acordados e queima a cota da organização inteira em poucos dias.
-- **Na apresentação, acorde os serviços 5 minutos antes.** O primeiro acesso a
-  um serviço hibernado leva cerca de um minuto. É o tipo de detalhe que estraga
-  uma demonstração boa. O mesmo vale para o Neon, cuja instância de computação
-  também entra em scale-to-zero por inatividade.
+- **A instância sobe sob demanda**, por workflow manual (`workflow_dispatch`), e
+  para sozinha após ~15 minutos sem tráfego de rede, via alarme do CloudWatch.
+- **QA fica com `replicas: 0` por padrão.** Sobe quando alguém vai validar.
+- **Na apresentação, suba a instância 10 minutos antes.** k3s leva ~1 minuto
+  para ficar pronto e os pods mais um pouco. O mesmo vale para o Neon, cuja
+  instância de computação também entra em scale-to-zero por inatividade.
+
+### Restrições do AWS Academy Learner Lab
+
+Não é uma conta AWS comum, e as restrições moldaram a arquitetura:
+
+| Restrição | Consequência |
+|---|---|
+| Sem permissão para criar roles/usuários IAM | **OIDC no Actions é inviável** → deploy por SSH |
+| Sem Identity Providers | idem |
+| Tipos de EC2 limitados até `large` | t3.medium é o teto prático de custo/benefício |
+| Regiões `us-east-1` / `us-west-2` | Latência maior, aceita |
+| Credenciais de sessão expiram em 4 h | Nada de credencial AWS em secret do GitHub; a EC2 usa IMDS |
+| Instância reinicia com IP público novo | **Elastic IP é obrigatório** |
+| `LabRole` e `LabInstanceProfile` já existem | Reaproveitados para o acesso ao S3 e ao CloudWatch |
 
 ---
 
@@ -509,7 +537,7 @@ Com o Website na Vercel, sobram apenas 4 serviços no Render. Duas regras:
 | Build + teste do Mobile (Gradle) | Local no Mobile | Idem |
 | Build + teste do Website (npm) | Local no Website | Idem |
 | Build Docker + push GHCR | **Reusable no DevOps** | Idêntico para API e Chatbot |
-| Deploy no Render | **Reusable no DevOps** | Idêntico para os dois serviços |
+| Deploy no k3s | **Reusable no DevOps** | Idêntico para os dois serviços |
 | Validação de PR | **Reusable no DevOps** | Regra da organização, não da aplicação |
 | Limpeza do GHCR | Workflow próprio do DevOps | Agendado, não é chamado por ninguém |
 
@@ -594,11 +622,13 @@ ci.yml       jobs: validate-pr | build-test (scripts em Postgres efêmero)
 
 ```text
 .github/workflows/
-├── reusable-validate-pr.yml        (workflow_call)
-├── reusable-docker-build-push.yml  (workflow_call)
-├── reusable-render-deploy.yml      (workflow_call)
-├── ci.yml                          (lint de YAML e do Compose)
-└── ghcr-cleanup.yml                (schedule mensal + workflow_dispatch)
+├── reusable-validate-pr.yaml         (workflow_call)
+├── reusable-docker-build-push.yaml   (workflow_call)
+├── reusable-k3s-deploy.yaml          (workflow_call)
+├── dispatch-deploy.yaml              (repository_dispatch + workflow_dispatch)
+├── ec2-power.yaml                    (workflow_dispatch)
+├── ci.yaml                           (lint de YAML e do Compose)
+└── ghcr-cleanup.yaml                 (schedule mensal + workflow_dispatch)
 ```
 
 ### Arquivos de apoio
@@ -627,26 +657,82 @@ Sem inputs — lê o contexto do PR herdado do workflow chamador. Verifica:
 - título do PR em Conventional Commits — importa porque o squash merge usa o
   título do PR como mensagem de commit.
 
-### 11.2 `reusable-docker-build-push.yml`
+### 11.2 `reusable-docker-build-push.yaml`
 
 ```yaml
-inputs:   image-name, context, dockerfile, push, moving-tag
-outputs:  image-tag        # sha-a1b2c3d
+inputs:   image-name, environment, context, dockerfile, push,
+          notify-devops, devops-repository
+secrets:  devops-dispatch-token
+outputs:  image, image-tag        # ghcr.io/app-volta/api, qa-a1b2c3d
 ```
 
-Login no GHCR com `GITHUB_TOKEN`, build para `linux/amd64`, cache de camadas
-via `type=gha`, tags da seção 16, labels OCI e push condicional.
+Valida o `environment` (só aceita `qa` ou `prod`), faz login no GHCR com
+`GITHUB_TOKEN`, build para `linux/amd64`, cache de camadas via `type=gha`, tags
+da seção 16, labels OCI e push condicional.
 
-### 11.3 `reusable-render-deploy.yml`
+Quando `notify-devops` está ligado, o último passo dispara `repository_dispatch`
+para o repositório DevOps:
+
+```json
+{
+  "event_type": "deploy",
+  "client_payload": {
+    "service": "api",
+    "env": "qa",
+    "image": "ghcr.io/app-volta/api",
+    "tag": "qa-a1b2c3d",
+    "commit": "<sha completo>",
+    "source_repository": "app-volta/api"
+  }
+}
+```
+
+O `GITHUB_TOKEN` do repositório de origem **não** consegue disparar dispatch
+cross-repo. É preciso um PAT com escrita no DevOps, no secret
+`devops-dispatch-token`; o workflow falha explicitamente se ele estiver
+ausente.
+
+### 11.3 `reusable-k3s-deploy.yaml`
+
+Substitui o antigo `reusable-render-deploy.yml`, removido junto com o Render.
 
 ```yaml
-inputs:   environment, image-name, image-tag, health-url, health-retries
-secrets:  render-deploy-hook
+inputs:   environment, service, image, image-tag, health-url, rollout-timeout
+secrets:  ssh-private-key, ssh-host
 ```
 
 Declara `environment: ${{ inputs.environment }}` — é esse job que fica parado
-esperando a aprovação em produção. Aciona o deploy hook fixando a tag exata,
-aguarda o health check e escreve o resumo da implantação.
+esperando a aprovação em produção. Em ordem:
+
+1. `kustomize edit set image` no overlay do ambiente;
+2. commit e push do overlay no próprio DevOps (o Git vira o histórico do que
+   está implantado);
+3. `scp` da pasta `kubernetes/` para a instância — o runner já tem o commit
+   exato em mãos, o que evita a instância ficar dessincronizada;
+4. `kubectl apply -k kubernetes/overlays/<env>`;
+5. `kubectl rollout status` — só retorna sucesso quando a readiness probe passa,
+   e é essa a verificação real de que a aplicação subiu;
+6. smoke test opcional pelo ingress, que valida o caminho completo (Traefik →
+   Service → pod) que o `rollout status` sozinho não cobre.
+
+Quando o Deployment está com `replicas: 0` (o padrão em QA), os passos 5 e 6 são
+pulados com um aviso: a imagem fica registrada no manifesto e sobe quando
+alguém escalar.
+
+### 11.3.1 `dispatch-deploy.yaml`
+
+Ponto de entrada do deploy, com dois gatilhos:
+
+- **`repository_dispatch`** (tipo `deploy`) — automático, disparado pelos
+  repositórios de aplicação logo após publicarem a imagem;
+- **`workflow_dispatch`** — manual, para reimplantar uma tag antiga sem rebuild.
+  É o caminho de rollback pela interface.
+
+O payload do dispatch vem de fora deste repositório, então nada nele é usado sem
+validação: serviço e ambiente conferidos contra uma lista fechada, tag conferida
+contra o padrão `<env>-<sha7>`, e — o check que mais importa — **o prefixo da
+tag precisa bater com o ambiente alvo**, o que impede implantar uma imagem de QA
+em produção.
 
 ### 11.4 `ghcr-cleanup.yml`
 
@@ -765,26 +851,35 @@ container. São boas práticas corporativas que não geram ação acionável aqu
 
 | Informação | Classificação | Onde fica |
 |---|---|---|
-| `RENDER_DEPLOY_HOOK` | **Secret de Environment** (`qa` e `prod`) | GitHub |
+| `SSH_PRIVATE_KEY` | **Secret de repositório** | GitHub (DevOps) |
+| `SSH_HOST` (Elastic IP) | Variable de repositório | GitHub (DevOps) |
+| `DEVOPS_DISPATCH_TOKEN` (PAT) | Secret de repositório | GitHub (repos de app) |
 | `GHCR_CLEANUP_TOKEN` (PAT) | Secret de repositório | GitHub (DevOps) |
-| Senha do Postgres (Neon) | Secret | Painel do Render |
-| String de conexão MongoDB Atlas | Secret | Painel do Render |
-| `JWT_SECRET` | Secret | Painel do Render (**diferente por ambiente**) |
-| Chave de API da LLM | Secret | Painel do Render |
+| Senha do Postgres (Neon) | Secret | `Secret` do namespace no k3s |
+| String de conexão MongoDB Atlas | Secret | `Secret` do namespace no k3s |
+| `JWT_SECRET` | Secret | `Secret` do namespace (**diferente por namespace**) |
+| Chave de API da LLM | Secret | `Secret` do namespace no k3s |
+| Credenciais AWS (S3) | Temporárias | IMDS da EC2 via `LabInstanceProfile` |
 | `GITHUB_TOKEN` | Automático | Gerado pelo Actions a cada execução |
 | URL pública da API por ambiente | Variable | `vars` do Environment |
 | `VITE_API_BASE_URL` | Variable (**nunca secret**) | Painel da Vercel, por ambiente |
 | Versões de Java/Node/Python | Versionado no Git | Dentro do workflow |
-| Dockerfiles, Compose, render.yaml | Versionado no Git | Repositório |
+| Dockerfiles, Compose, manifestos k8s | Versionado no Git | Repositório |
 | `.env.example` (chaves sem valores) | Versionado no Git | Repositório |
 | `.env` (com valores) | **Nunca versionado** | Máquina local |
 
 ### Onde o secret realmente mora
 
 **Os secrets da aplicação não ficam no GitHub.** Senha de banco, chave de LLM e
-`JWT_SECRET` são variáveis de ambiente no painel do Render, porque quem precisa
-deles é o container em execução — não o pipeline. O GitHub guarda apenas o que
-o *pipeline* precisa: essencialmente a URL do deploy hook.
+`JWT_SECRET` viram `Secret` do Kubernetes, criados manualmente uma vez por
+namespace, porque quem precisa deles é o container em execução — não o
+pipeline. O GitHub guarda apenas o que o *pipeline* precisa: a chave SSH e os
+PATs.
+
+Credencial AWS é um caso à parte e merece a ênfase: **nenhuma vai para secret do
+GitHub**. As do Learner Lab expiram em 4 horas, o que tornaria a rotação um
+trabalho manual semanal. A EC2 obtém credenciais pelo IMDS através do
+`LabInstanceProfile`, e elas se renovam sozinhas.
 
 Um `JWT_SECRET` diferente entre QA e PROD não é preciosismo: garante que um
 token emitido em QA não seja aceito em produção.
@@ -796,10 +891,12 @@ token emitido em QA não seja aceito em produção.
 ### Princípios
 
 - **Multi-stage sempre**: o compilador não vai para produção.
-- **`linux/amd64` obrigatório** — exigência do Render. Quem desenvolve em Mac
-  com Apple Silicon gera `arm64` por padrão e o deploy falha.
+- **`linux/amd64` obrigatório** — arquitetura da EC2 t3.medium. Quem desenvolve
+  em Mac com Apple Silicon gera `arm64` por padrão e o pod entra em
+  `CrashLoopBackOff` com `exec format error`.
 - **Usuário não-root** no estágio final.
-- **Porta por variável de ambiente**: o Render injeta `PORT`.
+- **Porta por variável de ambiente**: definida no ConfigMap do overlay e
+  espelhada no `containerPort` do Deployment.
 - **`.dockerignore` sempre** — com imagem pública, também é controle de
   segurança.
 
@@ -847,7 +944,7 @@ Arquivo em `DevOps/compose/docker-compose.yml`.
 | `website` | **Não** | `npm run dev` local é mais rápido e tem hot reload |
 | `pgadmin` / `mongo-express` | Opcional (profile `tools`) | Útil, não essencial |
 | Mobile | **Não** | Android precisa de SDK e emulador |
-| Proxy reverso | **Não** | Render e Vercel já resolvem TLS e roteamento |
+| Proxy reverso | **Não** | Traefik (no cluster) e Vercel já resolvem TLS e roteamento |
 
 ```bash
 docker compose up postgres mongo      # só os bancos (dev de API roda na IDE)
@@ -909,12 +1006,15 @@ validado. Ambiente é *tag* e *serviço*, não imagem diferente.
 
 | Tag | Muda? | Para quê |
 |---|---|---|
-| `sha-a1b2c3d` | **Imutável** | A verdade. Todo deploy fixa uma dessas |
+| `qa-a1b2c3d` | **Imutável** | A verdade em QA. Todo deploy de QA fixa uma dessas |
+| `prod-a1b2c3d` | **Imutável** | A verdade em PROD |
 | `qa` | Móvel | Aponta para o que está em QA |
-| `latest` | Móvel | Aponta para o que está em PROD |
+| `prod` | Móvel | Aponta para o que está em PROD |
 
-O deploy **sempre** referencia `sha-*`; as tags móveis são conveniência para
-humanos e para o Compose. É isso que torna o rollback trivial e o histórico
+O prefixo do ambiente na tag imutável é deliberado: olhando o `image:` de um
+Deployment dá para saber, sem consultar nada, de qual esteira aquele artefato
+veio. O deploy **sempre** referencia a tag imutável; as móveis são conveniência
+para humanos e para o Compose. É isso que torna o rollback trivial e o histórico
 auditável.
 
 Semantic versioning fica de fora: não há processo de release, e versão que
@@ -925,8 +1025,8 @@ ninguém incrementa com critério é pior que não ter versão.
 | Evento | Build? | Push? |
 |---|---|---|
 | PR para `develop`/`main` | Não | Não |
-| Merge em `develop` | Sim | `sha-*` + `qa` |
-| Merge em `main` | Sim | `sha-*` + `latest` |
+| Merge em `develop` | Sim | `qa-<sha>` + `qa` |
+| Merge em `main` | Sim | `prod-<sha>` + `prod` |
 
 Não construir imagem no PR mantém o feedback rápido: o CI já compila e testa, e
 o build Docker só é útil depois do merge.
@@ -950,53 +1050,98 @@ Consumir não exige nada: as imagens são públicas.
 2. O primeiro push cria o pacote como **privado**. Vá em *Package settings →
    Change visibility → Public*, uma vez por imagem.
 
-Se esquecer o passo 2, o deploy no Render falha com erro de pull.
+Se esquecer o passo 2, o pod fica em `ImagePullBackOff` — o k3s não tem
+credencial de registry configurada, por decisão.
 
 ### Limpeza
 
-Workflow mensal: apaga versões sem tag e mantém as ~10 tags `sha-*` mais
+Workflow mensal: apaga versões sem tag e mantém as ~10 tags imutáveis mais
 recentes.
 
-Cuidado crítico: o Render **não guarda imagens já baixadas** — ele puxa do
-registry a cada deploy, e também quando o serviço volta da hibernação. Apagar
-uma tag em uso **derruba o serviço no próximo restart**. Nunca apague `latest`,
-nunca apague `qa`, e mantenha as `sha-*` recentes, que são o alvo de rollback.
+Cuidado crítico: o k3s guarda a imagem no cache do containerd do nó, mas o
+`imagePullPolicy` e qualquer recriação de pod em um nó limpo voltam ao registry.
+Apagar uma tag em uso **derruba o serviço no próximo restart**. Nunca apague
+`qa` nem `prod`, e mantenha as tags `<env>-<sha>` recentes, que são o alvo de
+rollback.
 
 ---
 
-## 17. Deploy: Render e Vercel
+## 17. Deploy: Kubernetes e Vercel
 
-### 17.1 API e Chatbot — Render, image-backed
+### 17.1 API e Chatbot — k3s em EC2
 
-| | Git-backed (Render constrói) | **Image-backed (GHCR)** |
-|---|---|---|
-| Onde a imagem é construída | No Render | No GitHub Actions |
-| Artefato testado = implantado | Não garantido | **Garantido** |
-| Builds por entrega | 2 | 1 |
-| Usa GHCR | Não | Sim |
-| Rollback para versão arbitrária | Limitado | Por tag `sha-*` |
+**Por que k3s e não EKS.** O control plane do EKS custa ~US$ 73/mês — 146% do
+crédito do Learner Lab antes de subir um único pod. O k3s é Kubernetes
+certificado pela CNCF: mesma API, mesmo `kubectl`, mesmos manifestos. O que se
+perde é alta disponibilidade do control plane, que não é requisito aqui.
 
-Serviços baseados em imagem **não reimplantam sozinhos** quando a tag recebe
-imagem nova. O deploy é disparado pelo **deploy hook**, que aceita `imgURL` para
-puxar uma tag ou digest específicos:
+| | EKS | **k3s em EC2** (escolhido) | Render (anterior) |
+|---|---|---|---|
+| Requisito "Kubernetes" atendido | Sim | **Sim** | Não |
+| Custo do control plane | ~US$ 73/mês | **US$ 0** | — |
+| Cabe no Learner Lab | Não | **Sim** | — |
+| Alta disponibilidade | Sim | Não (nó único) | Parcial |
 
-```bash
-curl -fsS -X POST \
-  "${RENDER_DEPLOY_HOOK}&imgURL=ghcr.io%2Fapp-volta%2Fapi%3Asha-a1b2c3d"
+**Topologia.**
+
+```text
+EC2 t3.medium (Amazon Linux 2023) + Elastic IP
+└── k3s (single-node, Traefik embutido)
+    ├── namespace volta-qa     → api, chatbot   (replicas: 0 por padrão)
+    └── namespace volta-prod   → api, chatbot
 ```
 
-O serviço fica configurado com `latest`, mas cada deploy aponta para a `sha-*`
-daquele commit. A URL precisa estar codificada (`/` → `%2F`, `:` → `%3A`).
+Sem ELB e sem NAT Gateway — os dois maiores sorvedouros de crédito numa conta
+AWS pequena. O Traefik que já vem no k3s faz o papel de ingress.
 
-**Smoke test.** Disparar o hook retorna sucesso assim que o Render *aceita* o
-pedido — não quando a aplicação está de pé. Sem verificação, o workflow fica
-verde com o deploy falhando. O job termina consultando o health check até 30
-vezes, a cada 10 segundos.
+**Ingress e DNS.** `sslip.io` resolve qualquer IP embutido no próprio nome, o
+que dispensa comprar domínio e habilita HTTPS via cert-manager:
 
-**`render.yaml`.** Como nada foi criado ainda no Render, dá para provisionar a
-partir de um Blueprint versionado em `DevOps/render/render.yaml`. Declare
-serviços, região, health check path e variáveis com `sync: false` (o Render
-pede o valor sem versioná-lo).
+```text
+api.qa.<EIP>.sslip.io    → Service api,      namespace volta-qa,   port 8080
+api.<EIP>.sslip.io       → Service api,      namespace volta-prod, port 8080
+chat.qa.<EIP>.sslip.io   → Service chatbot,  namespace volta-qa,   port 8000
+chat.<EIP>.sslip.io      → Service chatbot,  namespace volta-prod, port 8000
+```
+
+**Kustomize.** `base/` descreve o que é igual nos dois ambientes; os overlays
+descrevem só a diferença.
+
+```text
+kubernetes/
+├── namespace.yaml            # volta-qa, volta-prod
+├── base/
+│   ├── api/{deployment,service,kustomization}.yaml
+│   ├── chatbot/{deployment,service,kustomization}.yaml
+│   └── ingress.yaml
+└── overlays/
+    ├── qa/{kustomization,configmap,replicas-patch}.yaml
+    └── prod/{kustomization,configmap,resources-patch}.yaml
+```
+
+O deploy roda `kustomize edit set image` no overlay, commita e aplica. O estado
+desejado fica versionado no Git — é GitOps sem Argo CD.
+
+**Autenticação do deploy: SSH.** O Learner Lab não permite criar roles IAM, o
+que elimina OIDC e SSM. Sobra chave SSH: pública no `authorized_keys` da
+instância, privada no secret `SSH_PRIVATE_KEY` do DevOps.
+
+**Health checks.** `readinessProbe` em `/actuator/health` (API) e `/health`
+(Chatbot); `livenessProbe` com `initialDelaySeconds: 30` e `timeoutSeconds: 5`.
+Sem probe, o `kubectl rollout status` retorna sucesso antes da aplicação estar
+de pé e o deploy fica verde com o serviço quebrado.
+
+**Secrets no cluster.** Criados manualmente com `kubectl create secret`, uma vez
+por namespace. Sem Sealed Secrets: a complexidade não se paga no escopo
+acadêmico, e a alternativa — commitar segredo cifrado — exigiria gestão de
+chave que ninguém vai manter.
+
+**Fotos do mobile.** Não passam pelo cluster. A API assina uma presigned URL do
+S3 (expiração de 15 min, Content-Type restrito), o mobile envia direto para o
+bucket e a API só registra a referência no banco. Com 512 MB de heap, a
+alternativa — upload atravessando o Spring Boot — não sobreviveria a dois
+usuários simultâneos. As credenciais AWS vêm do IMDS da instância via
+`LabInstanceProfile`, nunca de secret do GitHub.
 
 ### 17.2 Website — Vercel
 
@@ -1027,11 +1172,13 @@ enquadra.
 DevOps/
 ├── .github/
 │   ├── workflows/
-│   │   ├── reusable-validate-pr.yml
-│   │   ├── reusable-docker-build-push.yml
-│   │   ├── reusable-render-deploy.yml
-│   │   ├── ci.yml
-│   │   └── ghcr-cleanup.yml
+│   │   ├── reusable-validate-pr.yaml
+│   │   ├── reusable-docker-build-push.yaml
+│   │   ├── reusable-k3s-deploy.yaml      # deploy no cluster
+│   │   ├── dispatch-deploy.yaml          # recebe o repository_dispatch
+│   │   ├── ec2-power.yaml                # sobe/para a instância sob demanda
+│   │   ├── ci.yaml
+│   │   └── ghcr-cleanup.yaml
 │   ├── CODEOWNERS
 │   └── dependabot.yml
 │
@@ -1042,14 +1189,23 @@ DevOps/
 │   └── README.md
 │
 ├── docker/                      # templates de referência
-├── render/
-│   ├── render.yaml
-│   └── configuracao-servicos.md
+├── kubernetes/
+│   ├── namespace.yaml
+│   ├── base/
+│   │   ├── api/
+│   │   ├── chatbot/
+│   │   └── ingress.yaml
+│   └── overlays/
+│       ├── qa/
+│       └── prod/
 ├── vercel/
 │   └── configuracao-website.md
 ├── scripts/
 │   ├── setup-local.sh
-│   ├── deploy-manual.sh
+│   ├── lib-aws.sh               # convenções compartilhadas
+│   ├── provision-ec2-k3s.sh     # provisionamento idempotente (roda local)
+│   ├── cloud-init-k3s.sh        # user data: instala o k3s
+│   ├── rollback.sh              # rollback de emergência
 │   └── check-health.sh
 │
 ├── docs/
@@ -1058,7 +1214,7 @@ DevOps/
 │   ├── 03-secrets.md
 │   ├── 04-runbook-deploy.md
 │   ├── 05-padroes-git.md
-│   └── 99-evolucao-kubernetes.md
+│   └── 06-cluster-k3s.md
 │
 └── README.md
 ```
@@ -1069,9 +1225,10 @@ DevOps/
 |---|---|
 | `workflows/` → `.github/workflows/` | Requisito técnico do `workflow_call` |
 | `docker-compose/` → `compose/` | Evita `docker-compose/docker-compose.yml` |
-| `kubernetes/` removido | Não será implementado; vira `docs/99-evolucao-kubernetes.md` |
+| `kubernetes/` reintroduzido | Kubernetes virou requisito; manifestos Kustomize versionados aqui |
+| `render/` removido | Render descontinuado em favor do k3s |
 | `docker/` vira pasta de templates | Dockerfile de produção mora junto do código que ele constrói |
-| `vercel/` adicionado | O Website não é Render; a configuração precisa estar versionada |
+| `vercel/` adicionado | O Website não roda no cluster; a configuração precisa estar versionada |
 
 ---
 
@@ -1107,15 +1264,15 @@ DevOps/
 ╔══════════════════════════════════════════════════════════════════════════╗
 ║ CD QA — on: push develop                                                 ║
 ╚══════════════════════════════════════════════════════════════════════════╝
-   build-test  ──►  docker-build-push  ──►  deploy (environment: qa)
-                    ┌──────────────────┐    ┌───────────────────────────┐
-                    │ login GHCR       │    │ deploy hook + imgURL      │
-                    │ build amd64      │    │   fixando sha-a1b2c3d     │
-                    │ tags: sha-*, qa  │    │ smoke test em /health     │
-                    │ push             │    │ summary                   │
-                    └──────────────────┘    └─────────────┬─────────────┘
-                                                          ▼
-                                          Render: volta-api-qa
+   build-test  ──►  docker-build-push  ──►  repository_dispatch ──► DevOps
+                    ┌──────────────────────┐    ┌───────────────────────────┐
+                    │ login GHCR           │    │ kustomize edit set image  │
+                    │ build amd64          │    │ commit no DevOps          │
+                    │ tags: qa-a1b2c3d, qa │    │ ssh: kubectl apply -k qa  │
+                    │ push                 │    │ rollout status + /health  │
+                    └──────────────────────┘    └─────────────┬─────────────┘
+                                                              ▼
+                                          k3s: namespace volta-qa
                                           Neon branch qa / volta_qa
 
                              │  validação manual em QA (checklist)
@@ -1130,14 +1287,14 @@ DevOps/
 ║ CD PROD — on: push main                                                  ║
 ╚══════════════════════════════════════════════════════════════════════════╝
    build-test  ──►  docker-build-push  ──►  ⏸ APROVAÇÃO MANUAL
-                    (tags: sha-*, latest)   (Environment prod:
-                                             required reviewers)
+                    (tags: prod-a1b2c3d,    (Environment prod:
+                           prod)             required reviewers)
                                                     │
                                                     ▼
-                                        deploy hook + smoke test
+                                    ssh: kubectl apply -k prod + smoke test
                                                     │
                                                     ▼
-                                        Render: volta-api-prod
+                                        k3s: namespace volta-prod
                                         Neon branch prod / volta_prod
 
 ╔══════════════════════════════════════════════════════════════════════════╗
@@ -1152,7 +1309,9 @@ DevOps/
 ╚══════════════════════════════════════════════════════════════════════════╝
   Mobile             → CI + APK como artifact.  Sem CD.
   Database           → CI em Postgres efêmero.  Sem CD.
-  DevOps             → CI de YAML + limpeza mensal do GHCR.
+  DevOps             → CI de YAML + limpeza mensal do GHCR + recebe o dispatch.
+  EC2/k3s            → start manual (workflow_dispatch); auto-stop por
+                       inatividade (~15 min, alarme do CloudWatch).
   volta-landing-page → fora do ruleset e desta arquitetura.
 ```
 
@@ -1237,7 +1396,7 @@ publicado como artifact é o que o grupo instala para validar.
 2. Validado em QA                      (checklist)
 3. PR develop → main aprovado por CODEOWNER
 4. CI rodou de novo no merge           (bloqueante)
-5. Imagem publicada (sha-* + latest)
+5. Imagem publicada (prod-<sha> + prod)
 6. ⏸ Aprovação manual no Environment prod
 7. Deploy + smoke test
 ```
@@ -1247,24 +1406,32 @@ diferença entre processo pesado e processo bem colocado.
 
 ### Rollback
 
-**1. Painel do Render (segundos).** Volta para um dos dois deploys anteriores.
+**1. `kubectl rollout undo` (segundos).** Volta o Deployment para a revisão
+anterior direto no cluster. É o estanca-sangramento — mas deixa o cluster
+divergente do Git, então precisa ser seguido de 2 ou 3.
 
-**2. Redeploy de uma tag `sha-*` anterior (1–2 minutos).** É para isso que as
-tags imutáveis existem: dispare o `cd.yml` via `workflow_dispatch` informando a
-tag antiga. Sem rebuild, sem PR, sem esperar CI.
+```bash
+kubectl -n volta-prod rollout undo deployment/api
+```
+
+**2. Redeploy de uma tag `<env>-<sha>` anterior (1–2 minutos).** É para isso que
+as tags imutáveis existem: dispare o workflow de deploy via `workflow_dispatch`
+informando a tag antiga. Sem rebuild, sem PR, sem esperar CI. Como o overlay é
+commitado, o Git volta a refletir o cluster.
 
 **3. `git revert` do merge commit em `main`** → PR → pipeline normal. Os dois
 primeiros estancam o sangramento; este resolve.
 
 Para o Website, a Vercel promove um deployment anterior pelo painel.
 
-**Regra decorrente:** a limpeza do GHCR nunca pode apagar as tags `sha-*`
-recentes.
+**Regra decorrente:** a limpeza do GHCR nunca pode apagar as tags
+`<env>-<sha>` recentes.
 
 ### Runbook
 
 `DevOps/docs/04-runbook-deploy.md`, em uma página: como disparar deploy manual,
-como fazer rollback, onde ficam os logs, quem aprova produção e o que fazer se o
+como fazer rollback, onde ficam os logs (`kubectl logs`, `journalctl -u k3s`),
+quem aprova produção, como subir a EC2 quando estiver parada e o que fazer se o
 health check falhar. Escreva **antes** de precisar.
 
 ---
@@ -1318,7 +1485,7 @@ existem — a abertura é o que torna o requisito cumprível.
 
 | | **Vercel** (escolhido) | Render Static Site | Container nginx |
 |---|---|---|---|
-| Custo | Grátis (Hobby) | Grátis | Consome horas do Render |
+| Custo | Grátis (Hobby) | Grátis | Consome memória do nó k3s |
 | Preview por PR | ✅ nativo | Parcial | Não |
 | Cold start | Não tem | Não tem | ~1 min |
 | Peças a manter | Nenhuma | Nenhuma | Dockerfile + nginx.conf |
@@ -1339,11 +1506,12 @@ isolamento entre ambientes — o problema que o Aiven exigiria resolver na mão.
 
 ### 23.7 Gatilho de deploy
 
-| | **Deploy hook** (escolhido) | Render API | Auto-deploy |
+| | **repository_dispatch + SSH** (escolhido) | OIDC + SSM | GitOps (Argo CD) |
 |---|---|---|---|
-| Configuração | 1 secret | API key + service ID | Nenhuma |
-| Fixa tag imutável | ✅ via `imgURL` | ✅ | — |
-| Existe para image-backed | Sim | Sim | **Não** |
+| Configuração | PAT + chave SSH | Role IAM + agente | Controlador no cluster |
+| Fixa tag imutável | ✅ via kustomize | ✅ | ✅ |
+| Viável no Learner Lab | **Sim** | **Não** (sem IAM) | Sim, mas pesa no nó |
+| Estado versionado no Git | Sim (commit do overlay) | Não | Sim |
 
 ### 23.8 Modelo de branching
 
@@ -1359,43 +1527,61 @@ arquitetura fácil de explicar numa arguição.
 
 ---
 
-## 24. Evolução futura para Kubernetes
+## 24. Histórico da migração Render → Kubernetes
 
-Kubernetes **não** entra agora: não há requisito de escala, alta disponibilidade
-ou múltiplos nós, e a operação custaria mais tempo do que a aplicação inteira.
+A versão 3 deste documento registrava Kubernetes como *evolução futura*, com o
+argumento de que não havia requisito de escala nem de alta disponibilidade. O
+argumento continua correto — o que mudou foi outra coisa: **Kubernetes virou
+requisito explícito da disciplina de DevOps**, junto com a exigência de nuvem
+como infraestrutura. Deixou de ser uma escolha técnica de escala e passou a ser
+entregável avaliado.
 
-O que **não** mudaria numa eventual migração — e é por isso que esta arquitetura
-é uma boa base:
+O que a migração **não** exigiu mudar — e é a prova de que a arquitetura
+anterior era uma base sólida:
 
 - os Dockerfiles;
 - as imagens no GHCR e a estratégia de tags imutáveis;
-- os workflows de CI e de build/push;
-- a separação QA/PROD e a gestão de secrets.
+- os workflows de CI e de validação de PR;
+- a separação QA/PROD, os Environments e a gestão de secrets;
+- o ruleset, o CODEOWNERS e o fluxo de branches.
 
-O que mudaria: apenas o **último passo**.
+O que mudou foi o **último passo** da esteira, exatamente como previsto:
 
 ```text
-hoje:    build → GHCR → deploy hook (Render)
-depois:  build → GHCR → kubectl set image / Helm upgrade / commit GitOps
+antes:  build → GHCR → deploy hook (Render)
+agora:  build → GHCR → repository_dispatch → kustomize → SSH → kubectl apply
 ```
 
-Caminho mínimo:
+Mudanças concretas registradas:
 
-1. `Deployment` + `Service` + `Ingress` para API e Chatbot, referenciando
-   `ghcr.io/app-volta/api:sha-*`.
-2. Um namespace por ambiente (`volta-qa`, `volta-prod`).
-3. Como as imagens são públicas, nem o `Secret` do tipo `dockerconfigjson` é
-   necessário.
-4. Argo CD ou Flux para GitOps — aí o DevOps vira a fonte de verdade do estado
-   desejado, continuação natural da centralização que já existe.
+| Item | Antes (v3) | Agora (v4) |
+|---|---|---|
+| Runtime | Render (image-backed) | k3s em EC2 t3.medium |
+| Gatilho de deploy | Deploy hook com `imgURL` | `repository_dispatch` + SSH |
+| Tag imutável | `sha-a1b2c3d` | `<env>-a1b2c3d` |
+| Isolamento de ambiente | 2 serviços por app | 2 namespaces |
+| `reusable-render-deploy.yml` | Existia | **Removido** |
+| Manifestos | — | `kubernetes/` com Kustomize |
+
+### O que ficou de fora, e por quê
+
+- **Argo CD / Flux.** O controlador consumiria memória do nó único que é
+  justamente o recurso escasso. O commit do overlay já dá o histórico
+  auditável, que era o principal ganho do GitOps aqui.
+- **Sealed Secrets.** `kubectl create secret` manual, uma vez por namespace.
+- **Cluster multi-nó.** Alta disponibilidade custaria cerca de 4x o orçamento
+  sem agregar ao que é avaliado. Nó único é ponto único de falha — decisão
+  consciente, registrada.
+- **EKS.** ~US$ 73/mês só de control plane, 146% do crédito disponível.
 
 ---
 
 ## 25. Recomendações finais
 
 **Sequência de implantação.** (1) DevOps com os reusable workflows; (2) CI da
-API; (3) CD da API + Dockerfile; (4) Compose; (5) Chatbot; (6) Website +
-Vercel; (7) Mobile e Database. A API serve de piloto — os erros aparecem uma
+API; (3) build/push da API + Dockerfile; (4) Compose; (5) EC2 + k3s + Elastic
+IP; (6) manifestos e deploy da API; (7) Chatbot; (8) Website + Vercel; (9)
+Mobile e Database. A API serve de piloto — os erros aparecem uma
 vez, não cinco.
 
 **Ligue o ruleset depois que o CI rodar verde uma vez.** Ligar antes bloqueia
@@ -1414,21 +1600,26 @@ outros repositórios, senão o `@v1` não resolve.
 **`concurrency` em tudo.** `cancel-in-progress: true` no CI, `false` no deploy.
 
 **Health check é infraestrutura, não enfeite.** Sem `/actuator/health` e
-`/health` não há smoke test, não há verificação de deploy e o Render não sabe se
-o serviço subiu.
+`/health` não há readiness probe, não há smoke test e o `kubectl rollout status`
+declara sucesso antes de a aplicação estar de pé.
 
 **Revise o que entra na imagem pública.** Rode `docker run --rm -it
-ghcr.io/app-volta/api:latest sh` uma vez e confira o que está lá dentro.
+ghcr.io/app-volta/api:prod sh` uma vez e confira o que está lá dentro.
 
 **Um `.env.example` completo em cada repositório.** É a documentação que as
 pessoas realmente leem.
 
-**Não coloque uptime pinger nos serviços do Render.** Queima a cota de horas
-gratuitas da organização inteira.
+**Aloque o Elastic IP na primeira sessão do lab.** Sem ele, cada reinício da
+instância troca o IP público, o que quebra o SSH do deploy e todos os hostnames
+`sslip.io` do ingress de uma vez.
+
+**Confira o AWS Budget antes de qualquer coisa.** Alertas em US$ 10, US$ 25 e
+US$ 40. O vilão é instância esquecida ligada — o auto-stop por inatividade
+existe justamente para isso.
 
 **Documente a decisão, não só a configuração.** Numa arguição individual,
-explicar por que o deploy fixa a tag `sha-*` em vez de usar `latest` vale muito
-mais do que recitar o YAML.
+explicar por que o deploy fixa a tag `<env>-<sha>` em vez de usar a tag móvel —
+ou por que k3s em vez de EKS — vale muito mais do que recitar o YAML.
 
 ---
 

@@ -1,0 +1,244 @@
+name: Reusable - Deploy no k3s
+
+# Implanta uma imagem já publicada no GHCR dentro do cluster k3s.
+#
+# Fluxo:
+#   1. kustomize edit set image  -> fixa a tag imutável no overlay do ambiente
+#   2. commit + push             -> o Git passa a refletir o que está no cluster
+#   3. scp dos manifestos        -> leva o estado desejado para a instância
+#   4. kubectl apply -k          -> aplica
+#   5. kubectl rollout status    -> só retorna quando a readiness probe passa
+#   6. smoke test pelo ingress   -> valida o caminho completo (Traefik -> pod)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: Ambiente alvo (qa ou prod)
+        required: true
+        type: string
+      service:
+        description: Nome do Deployment e do Service (api ou chatbot)
+        required: true
+        type: string
+      image:
+        description: Imagem sem tag (ex.- ghcr.io/app-volta/api)
+        required: true
+        type: string
+      image-tag:
+        description: Tag imutável a implantar (ex.- qa-a1b2c3d)
+        required: true
+        type: string
+      health-url:
+        description: URL pública para o smoke test. Vazio pula a verificação.
+        required: false
+        type: string
+        default: ''
+      rollout-timeout:
+        description: Tempo máximo de espera pelo rollout
+        required: false
+        type: string
+        default: 180s
+    secrets:
+      ssh-private-key:
+        description: Chave privada de acesso à EC2
+        required: true
+      ssh-host:
+        description: Elastic IP da instância
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+
+    # Um deploy por ambiente de cada vez. `cancel-in-progress: false` porque
+    # cancelar um deploy pela metade deixa cluster e Git divergentes.
+    concurrency:
+      group: k3s-deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+
+    env:
+      NAMESPACE: volta-${{ inputs.environment }}
+      OVERLAY: kubernetes/overlays/${{ inputs.environment }}
+
+    steps:
+      - name: Validar ambiente informado
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          case "$ENVIRONMENT" in
+            qa|prod) echo "Ambiente OK: $ENVIRONMENT" ;;
+            *)
+              echo "::error::Ambiente inválido: '$ENVIRONMENT'. Use 'qa' ou 'prod'."
+              exit 1
+              ;;
+          esac
+
+      - name: Checkout do DevOps
+        uses: actions/checkout@v4
+        with:
+          # Necessário para o push do overlay atualizado.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Instalar kustomize
+        run: |
+          curl -sfL https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh \
+            | bash -s -- 5.4.3 /usr/local/bin
+          kustomize version
+
+      - name: Fixar a tag da imagem no overlay
+        id: kustomize
+        env:
+          IMAGE: ${{ inputs.image }}
+          IMAGE_TAG: ${{ inputs.image-tag }}
+        run: |
+          cd "$OVERLAY"
+          kustomize edit set image "${IMAGE}=${IMAGE}:${IMAGE_TAG}"
+          cd - > /dev/null
+
+          if git diff --quiet -- "$OVERLAY"; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Overlay já apontava para ${IMAGE}:${IMAGE_TAG} — nada a commitar."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git --no-pager diff -- "$OVERLAY"
+          fi
+
+      - name: Commitar o overlay
+        if: steps.kustomize.outputs.changed == 'true'
+        env:
+          SERVICE: ${{ inputs.service }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          IMAGE_TAG: ${{ inputs.image-tag }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$OVERLAY"
+          git commit -m "chore(deploy): ${SERVICE} ${IMAGE_TAG} em ${ENVIRONMENT}"
+
+          # Dois serviços podem terminar o build ao mesmo tempo e disputar o push.
+          for i in 1 2 3; do
+            if git push; then
+              echo "Push concluído na tentativa ${i}."
+              exit 0
+            fi
+            echo "Push recusado (tentativa ${i}). Rebaseando..."
+            git pull --rebase --autostash
+          done
+
+          echo "::error::Não foi possível fazer push do overlay após 3 tentativas."
+          exit 1
+
+      - name: Preparar chave SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.ssh-private-key }}
+          SSH_HOST: ${{ secrets.ssh-host }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          # A instância pode ter sido recriada; aceitar a chave de host nova.
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+          if ! ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+               -o BatchMode=yes "ec2-user@${SSH_HOST}" 'true'; then
+            echo "::error::SSH falhou. A instância está ligada? Rode o workflow 'Ligar e desligar o cluster'."
+            exit 1
+          fi
+
+      - name: Enviar manifestos para a instância
+        env:
+          SSH_HOST: ${{ secrets.ssh-host }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "ec2-user@${SSH_HOST}" \
+            'rm -rf ~/volta-devops/kubernetes && mkdir -p ~/volta-devops'
+
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -r \
+            kubernetes "ec2-user@${SSH_HOST}:~/volta-devops/"
+
+      - name: Aplicar no cluster
+        env:
+          SSH_HOST: ${{ secrets.ssh-host }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "ec2-user@${SSH_HOST}" \
+            "kubectl apply -f ~/volta-devops/kubernetes/namespace.yaml && \
+             kubectl apply -k ~/volta-devops/${OVERLAY}"
+
+      - name: Aguardar o rollout
+        env:
+          SSH_HOST: ${{ secrets.ssh-host }}
+          SERVICE: ${{ inputs.service }}
+          TIMEOUT: ${{ inputs.rollout-timeout }}
+        run: |
+          # Em QA o Deployment nasce com replicas 0. Nesse caso não há rollout
+          # para esperar: a imagem fica registrada e sobe quando alguém escalar.
+          REPLICAS=$(ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "ec2-user@${SSH_HOST}" \
+            "kubectl -n ${NAMESPACE} get deployment/${SERVICE} -o jsonpath='{.spec.replicas}'")
+
+          if [ "$REPLICAS" = "0" ]; then
+            echo "::notice::${SERVICE} em ${NAMESPACE} está com replicas=0. Imagem registrada, sem rollout."
+            echo "Para subir: kubectl -n ${NAMESPACE} scale deployment/${SERVICE} --replicas=1"
+            exit 0
+          fi
+
+          # rollout status só retorna sucesso quando a readiness probe passa —
+          # é a verificação real de que a aplicação subiu, não só o container.
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "ec2-user@${SSH_HOST}" \
+            "kubectl -n ${NAMESPACE} rollout status deployment/${SERVICE} --timeout=${TIMEOUT}"
+
+      - name: Smoke test pelo ingress
+        if: inputs.health-url != ''
+        env:
+          HEALTH_URL: ${{ inputs.health-url }}
+          SSH_HOST: ${{ secrets.ssh-host }}
+          SERVICE: ${{ inputs.service }}
+        run: |
+          REPLICAS=$(ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "ec2-user@${SSH_HOST}" \
+            "kubectl -n ${NAMESPACE} get deployment/${SERVICE} -o jsonpath='{.spec.replicas}'")
+
+          if [ "$REPLICAS" = "0" ]; then
+            echo "Deployment com replicas=0 — smoke test pulado."
+            exit 0
+          fi
+
+          echo "Verificando ${HEALTH_URL}..."
+          for i in $(seq 1 12); do
+            if curl -fsS --max-time 10 "$HEALTH_URL" > /dev/null; then
+              echo "Serviço respondeu na tentativa ${i}."
+              exit 0
+            fi
+            echo "Tentativa ${i}/12 sem resposta. Aguardando 10s..."
+            sleep 10
+          done
+
+          echo "::error::O rollout concluiu, mas ${HEALTH_URL} não respondeu."
+          echo "::error::Provável problema de ingress (host errado?) e não da aplicação."
+          exit 1
+
+      - name: Limpar a chave SSH
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
+
+      - name: Registrar resumo
+        if: always()
+        run: |
+          {
+            echo "### Deploy — ${{ inputs.service }} em ${{ inputs.environment }}"
+            echo ""
+            echo "| Campo | Valor |"
+            echo "|---|---|"
+            echo "| Serviço | \`${{ inputs.service }}\` |"
+            echo "| Namespace | \`${{ env.NAMESPACE }}\` |"
+            echo "| Imagem | \`${{ inputs.image }}:${{ inputs.image-tag }}\` |"
+            echo "| Overlay commitado | ${{ steps.kustomize.outputs.changed == 'true' && 'sim' || 'não (já estava atualizado)' }} |"
+            echo "| Smoke test | ${{ inputs.health-url != '' && inputs.health-url || 'pulado' }} |"
+            echo "| Resultado | ${{ job.status }} |"
+            echo ""
+            echo "Rollback: \`./scripts/rollback.sh ${{ inputs.environment }} ${{ inputs.service }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

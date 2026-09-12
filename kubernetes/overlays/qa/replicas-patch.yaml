@@ -1,0 +1,11 @@
+# QA nasce desligado: zero cópias rodando.
+#
+# Motivo: a t3.medium tem 4 GB de memória compartilhados entre QA e produção.
+# Manter QA parado deixa a memória para produção; quem for validar sobe sob
+# demanda com:
+#   kubectl -n volta-qa scale deployment/api --replicas=1
+#
+# O alvo (todos os Deployments) é declarado em kustomization.yaml.
+- op: replace
+  path: /spec/replicas
+  value: 0
