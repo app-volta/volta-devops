@@ -28,7 +28,7 @@ usage() {
 Uso: ./scripts/rollback.sh <ambiente> <serviço> [tag|--history]
 
   ambiente   qa | prod
-  serviço    api | chatbot
+  serviço    api | api-redis | chatbot
   tag        Tag imutável a restaurar (ex.: prod-a1b2c3d).
              Omitida, volta para a revisão imediatamente anterior.
   --history  Apenas lista o histórico de revisões, sem alterar nada.
@@ -56,8 +56,8 @@ case "$ENVIRONMENT" in
 esac
 
 case "$SERVICE" in
-  api|chatbot) ;;
-  *) die "Serviço inválido: '${SERVICE}'. Use 'api' ou 'chatbot'." ;;
+  api|api-redis|chatbot) ;;
+  *) die "Serviço inválido: '${SERVICE}'. Use 'api', 'api-redis' ou 'chatbot'." ;;
 esac
 
 NAMESPACE="volta-${ENVIRONMENT}"

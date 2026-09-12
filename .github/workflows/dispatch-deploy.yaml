@@ -19,7 +19,7 @@ on:
         description: Serviço a implantar
         required: true
         type: choice
-        options: [api, chatbot]
+        options: [api, api-redis, chatbot]
       environment:
         description: Ambiente alvo
         required: true
@@ -74,8 +74,8 @@ jobs:
           # O dispatch vem de fora deste repositório: nada do que ele manda pode
           # ser usado sem conferir.
           case "$SERVICE" in
-            api|chatbot) ;;
-            *) echo "::error::Serviço inválido: '${SERVICE}'. Aceitos: api, chatbot."; exit 1 ;;
+            api|api-redis|chatbot) ;;
+            *) echo "::error::Serviço inválido: '${SERVICE}'. Aceitos: api, api-redis, chatbot."; exit 1 ;;
           esac
 
           case "$ENVIRONMENT" in
@@ -106,8 +106,9 @@ jobs:
             HEALTH_URL=""
           else
             case "$SERVICE" in
-              api)     PREFIX="api";  HEALTH_PATH="/actuator/health" ;;
-              chatbot) PREFIX="chat"; HEALTH_PATH="/health" ;;
+              api)       PREFIX="api";     HEALTH_PATH="/actuator/health" ;;
+              api-redis) PREFIX="ranking"; HEALTH_PATH="/actuator/health" ;;
+              chatbot)   PREFIX="chat";    HEALTH_PATH="/health" ;;
             esac
 
             if [ "$ENVIRONMENT" = "qa" ]; then
