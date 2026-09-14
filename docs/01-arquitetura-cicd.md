@@ -222,20 +222,22 @@ main     ──●───────────────●────�
             ╲             ╱ ╲            ╱
 develop  ────●───●───●───●───●───●───●──●─────────►  QA
               ╲ ╱     ╲ ╱         ╲ ╱
-feat/12-login ●       ●            ●
+feat/SCRUM-1858 ●    ●            ●
 ```
 
-### Ajuste no padrão de nomes
+### Padrão de nomes validado automaticamente
 
-O regex originalmente proposto exigia exatamente dois dígitos
-(`[0-9]{2}`), o que rejeita a issue #103. Padrão adotado:
+Branches de trabalho usam um tipo permitido seguido da chave Jira do projeto.
+O prefixo é exatamente `SCRUM`, em maiúsculas, seguido de 1 a 4 dígitos e sem
+descrição adicional. Padrão adotado:
 
 ```regex
-^(feat|fix|refactor|chore|test|docs)/[0-9]{1,4}-[a-z0-9._-]+$
+^(feat|fix|refactor|chore|test|docs)/SCRUM-[0-9]{1,4}$
 ```
 
-Também força o descritivo em minúsculas com hífen, evitando
-`feat/12-Login_Tela FINAL`. Quem verifica é o job `validate-pr`.
+Exemplos válidos: `feat/SCRUM-1858`, `fix/SCRUM-123` e
+`chore/SCRUM-1933`. Prefixos diferentes (como `SCRU`), letras minúsculas ou
+sufixos descritivos são rejeitados pelo job `validate-pr`.
 
 ### Hotfix
 
@@ -245,12 +247,12 @@ Sem branches `release/*`, ainda falta responder: *e quando PROD quebra e
 ```text
 main ──●──────────────●──►
         ╲            ╱ ╲
-         ● fix/NN-x ─┘   ╲ (back-merge obrigatório)
+         ● fix/SCRUM-123 ─┘   ╲ (back-merge obrigatório)
                           ▼
 develop ──────────────────●──►
 ```
 
-1. Criar `fix/NN-descricao` **a partir de `main`**.
+1. Criar `fix/SCRUM-123` **a partir de `main`**.
 2. PR para `main`, com os mesmos checks e aprovação.
 3. Depois do merge, **abrir imediatamente um PR de `main` para `develop`**. Sem
    esse passo, o próximo merge `develop → main` reintroduz o bug.
@@ -263,13 +265,13 @@ documentado antes de acontecer às 23h da véspera da entrega.
 ## 5. Fluxo de Pull Requests
 
 ```text
- Issue #12 criada e atribuída
+ Ticket SCRUM-1858 criado e atribuído no Jira
         │
-        ├─► branch feat/12-login (a partir de develop)
+        ├─► branch feat/SCRUM-1858 (a partir de develop)
         │
         ├─► commits (Conventional Commits)
         │
-        ├─► PR para develop, com "Closes #12" no corpo
+        ├─► PR para develop, vinculado ao ticket SCRUM-1858
         │        │
         │        ├─ [auto] validate-pr  → nome da branch, base, título
         │        ├─ [auto] build-test   → build, testes, lint
@@ -283,13 +285,13 @@ documentado antes de acontecer às 23h da véspera da entrega.
 
 Três pontos que fazem diferença:
 
-- **`Closes #12` no corpo do PR** fecha a issue no merge e mantém a
-  rastreabilidade issue ↔ branch ↔ PR ↔ commit.
+- **A chave Jira no nome da branch e no PR** mantém a rastreabilidade
+  ticket ↔ branch ↔ PR ↔ commit.
 - **PR de feature só pode ter `develop` como base** — verificado pelo
   `validate-pr`.
-- **Um PR, uma issue.** PRs que resolvem três coisas são impossíveis de revisar
-  e destroem a distribuição de commits entre colaboradores, que é critério de
-  avaliação.
+- **Um PR, um ticket Jira.** PRs que resolvem três coisas são impossíveis de
+  revisar e destroem a distribuição de commits entre colaboradores, que é
+  critério de avaliação.
 
 Como o code review é requisito avaliado, o template de PR ganha peso. Checklist
 sugerido:
@@ -943,7 +945,7 @@ página do repo e herdar permissões.
 
 ## 15. Estratégia de Docker Compose
 
-Arquivo em `DevOps/compose/docker-compose.yml`.
+Arquivo em `docker-compose/docker-compose.yaml`.
 
 | Serviço | No Compose? | Por quê |
 |---|---|---|
@@ -955,6 +957,8 @@ Arquivo em `DevOps/compose/docker-compose.yml`.
 | `pgadmin` / `mongo-express` | Opcional (profile `tools`) | Útil, não essencial |
 | Mobile | **Não** | Android precisa de SDK e emulador |
 | Proxy reverso | **Não** | Traefik (no cluster) e Vercel já resolvem TLS e roteamento |
+
+No Compose local, o serviço `chatbot` define `ENVIRONMENT: qa`.
 
 ```bash
 docker compose up postgres mongo      # só os bancos (dev de API roda na IDE)
@@ -1252,7 +1256,7 @@ DevOps/
 ╔══════════════════════════════════════════════════════════════════════════╗
 ║ DESENVOLVIMENTO                                                          ║
 ╚══════════════════════════════════════════════════════════════════════════╝
-  Issue #12  ──►  git switch -c feat/12-login  (a partir de develop)
+  Ticket SCRUM-1858  ──►  git switch -c feat/SCRUM-1858  (a partir de develop)
                             │  commits + push
                             ▼
                   ┌──────────────────────┐

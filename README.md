@@ -8,6 +8,7 @@ solução para descarte de resíduos em empresas.
 | Diretório | Conteúdo |
 |---|---|
 | `.github/workflows/` | Reusable workflows consumidos pelos repositórios de aplicação |
+| `docker-compose/` | Compose local; o chatbot usa `ENVIRONMENT: qa` |
 | `kubernetes/` | Manifestos Kustomize (`base/` + `overlays/qa` e `overlays/prod`) |
 | `scripts/` | Provisionamento do cluster, aplicação de manifestos e rollback |
 | `docs/` | Documentação de arquitetura e decisões |
@@ -41,6 +42,9 @@ Código → CI → imagem no GHCR (<env>-<sha>) → repository_dispatch
 | `reusable-docker-build-push.yaml` | Build, push no GHCR e `repository_dispatch` para este repositório |
 | `ghcr-cleanup.yaml` | Limpeza mensal de versões sem tag |
 | `ec2-power.yaml` | Liga, desliga e inspeciona a EC2 do cluster (`workflow_dispatch`) |
+
+Padrão de branch aceito: `^(feat|fix|refactor|chore|test|docs)/SCRUM-[0-9]{1,4}$`
+(prefixo Jira `SCRUM` em maiúsculas; exemplo: `feat/SCRUM-1858`).
 
 Uso a partir de um repositório de aplicação:
 

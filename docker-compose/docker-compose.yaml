@@ -70,7 +70,7 @@ services:
     environment:
       POSTGRES_DSN: postgresql://volta:volta_local@postgres:5432/volta
       MONGO_URI: mongodb://volta:volta_local@mongo:27017/volta_memory?authSource=admin
-      ENVIRONMENT: development
+      ENVIRONMENT: qa
       RAG_BASE_PATH: ./data/faiss
     ports:
       - "8000:8000"

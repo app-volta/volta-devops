@@ -17,10 +17,10 @@ jobs:
         env:
           HEAD_REF: ${{ github.head_ref }}
         run: |
-          PATTERN='^(feat|fix|refactor|chore|test|docs)/[a-zA-Z]{4}-[0-9]{1,4}$'
+          PATTERN='^(feat|fix|refactor|chore|test|docs)/SCRUM-[0-9]{1,4}$'
           if [[ ! "$HEAD_REF" =~ $PATTERN ]]; then
             echo "::error::Nome de branch inválido: '$HEAD_REF'."
-            echo "::error::Padrão esperado: (feat|fix|refactor|chore|test|docs)/NN-descricao"
+            echo "::error::Padrão esperado: (feat|fix|refactor|chore|test|docs)/SCRUM-<1-4 números>"
             exit 1
           fi
           echo "Nome de branch OK: $HEAD_REF"
