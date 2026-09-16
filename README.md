@@ -75,6 +75,16 @@ GitHub, no workflow **"Ligar e desligar o cluster"**
 A instância para sozinha após ~15 min sem tráfego de rede. Passo a passo
 completo e diagnóstico em [`docs/06-cluster-k3s.md`](docs/06-cluster-k3s.md).
 
+### Renovar a credencial da sessão do Learner Lab
+
+A cada ~4h a sessão expira. Em vez de editar `~/.aws/credentials` e os
+GitHub Secrets na mão, cole o bloco de "AWS Details" → "AWS CLI" neste script:
+
+```bash
+./scripts/update-aws-session.sh          # grava ~/.aws/credentials
+./scripts/update-aws-session.sh --gh     # também atualiza os secrets usados pelo ec2-power.yaml
+```
+
 ## Documentação
 
 - [`docs/01-arquitetura-cicd.md`](docs/01-arquitetura-cicd.md) — arquitetura de
@@ -82,3 +92,5 @@ completo e diagnóstico em [`docs/06-cluster-k3s.md`](docs/06-cluster-k3s.md).
   comparações que sustentam cada decisão.
 - [`docs/06-cluster-k3s.md`](docs/06-cluster-k3s.md) — runbook do cluster:
   provisionamento, operação, custo e diagnóstico.
+- [`docs/07-vercel-website.md`](docs/07-vercel-website.md) — como o projeto
+  Vercel do Website é configurado (branches, env vars).
