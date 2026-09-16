@@ -5,7 +5,7 @@
 set -euxo pipefail
 
 # --- Pacotes básicos ---------------------------------------------------------
-dnf install -y curl tar git jq
+dnf install -y tar git jq
 
 # --- k3s ---------------------------------------------------------------------
 # --write-kubeconfig-mode 644 permite que o usuário ec2-user use kubectl sem
