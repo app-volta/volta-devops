@@ -87,8 +87,12 @@ jobs:
 
       - name: Instalar kustomize
         run: |
-          curl -sfL https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh \
-            | bash -s -- 5.4.3 /usr/local/bin
+          # Os runners hospedados pelo GitHub podem já trazer o binário.
+          # O instalador oficial falha se tentar sobrescrevê-lo.
+          if ! command -v kustomize >/dev/null 2>&1; then
+            curl -sfL https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh \
+              | bash -s -- 5.4.3 /usr/local/bin
+          fi
           kustomize version
 
       - name: Fixar a tag da imagem no overlay
