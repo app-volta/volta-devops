@@ -704,6 +704,12 @@ inputs:   environment, service, image, image-tag, health-url, rollout-timeout
 secrets:  ssh-private-key, ssh-host
 ```
 
+Antes de editar o overlay, o workflow verifica se o runner já disponibiliza o
+binário `kustomize`. Runners hospedados pelo GitHub podem trazê-lo instalado;
+nesse caso ele é reutilizado. A versão fixada `5.4.3` só é instalada quando o
+binário não existe, evitando o erro do instalador ao tentar sobrescrever
+`/usr/local/bin/kustomize`.
+
 Responsabilidades previstas:
 
 1. `kustomize edit set image <service>=<image>:<tag>` no overlay do ambiente;
