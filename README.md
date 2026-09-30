@@ -34,6 +34,14 @@ Código → CI → imagem no GHCR (<env>-<sha>) → repository_dispatch
 | Objetos | S3 via presigned URL assinada pela API |
 | Website | Vercel |
 
+## HTTPS no QA
+
+O overlay de QA está sendo preparado para servir `api`, `ranking` e `chat` em `https://<serviço>.qa.<EIP>.sslip.io`, com TLS terminado no Traefik e certificados Let's Encrypt geridos pelo cert-manager. O deploy instala o cert-manager, aplica o ClusterIssuer e valida o certificado e o health check HTTPS quando o Deployment tem réplicas ativas. `SSH_HOST` precisa estar definido nas variáveis do repositório.
+
+Essa configuração ainda precisa ser publicada e validada no cluster. O chatbot de QA permanece em `replicas=0` por padrão; para validar o app via HTTPS será necessário escalar temporariamente uma réplica, testar sessão e chat autenticados pelo cliente mobile e depois voltar a zero. Passos e diagnóstico: [`docs/06-cluster-k3s.md`](docs/06-cluster-k3s.md).
+
+O workflow manual `Deploy` tem a opção `qa-smoke`, restrita ao chatbot em QA. Ela escala temporariamente uma réplica, aguarda readiness, executa `GET /health` pelo HTTPS e sempre tenta restaurar `replicas=0`. Esse health check não substitui o teste de sessão e chat autenticados no app mobile.
+
 ## Workflows reutilizáveis
 
 | Workflow | Função |

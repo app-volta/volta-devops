@@ -28,6 +28,10 @@ images:
 
   # Hosts de QA. SUBSTITUA 0.0.0.0 PELO ELASTIC IP DA INSTÂNCIA.
 patches:
+- path: https-patch.yaml
+  target:
+    kind: Ingress
+    name: volta
 - path: replicas-patch.yaml
   target:
     kind: Deployment

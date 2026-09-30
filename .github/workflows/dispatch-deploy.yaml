@@ -25,6 +25,11 @@ on:
         required: true
         type: choice
         options: [qa, prod]
+      qa-smoke:
+        description: Escala o chatbot QA, testa HTTPS e restaura replicas=0.
+        required: false
+        type: boolean
+        default: false
       image-tag:
         description: Tag imutável (ex.- qa-a1b2c3d). Deve existir no GHCR.
         required: true
@@ -43,7 +48,7 @@ jobs:
       environment: ${{ steps.payload.outputs.environment }}
       image: ${{ steps.payload.outputs.image }}
       image-tag: ${{ steps.payload.outputs.image-tag }}
-      health-url: ${{ steps.payload.outputs.health-url }}
+      qa-smoke: ${{ steps.payload.outputs.qa-smoke == 'true' }}
 
     steps:
       - name: Normalizar a origem do gatilho
@@ -58,14 +63,16 @@ jobs:
           W_SERVICE: ${{ inputs.service }}
           W_ENV: ${{ inputs.environment }}
           W_TAG: ${{ inputs.image-tag }}
+          W_QA_SMOKE: ${{ inputs.qa-smoke }}
           # comum
           OWNER: ${{ github.repository_owner }}
-          CLUSTER_IP: ${{ vars.SSH_HOST }}
         run: |
           if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
             SERVICE="$D_SERVICE"; ENVIRONMENT="$D_ENV"; TAG="$D_TAG"; IMAGE="$D_IMAGE"
+            QA_SMOKE="false"
           else
             SERVICE="$W_SERVICE"; ENVIRONMENT="$W_ENV"; TAG="$W_TAG"
+            QA_SMOKE="$W_QA_SMOKE"
             IMAGE="ghcr.io/${OWNER}/${SERVICE}"
             IMAGE="${IMAGE,,}"
           fi
@@ -99,25 +106,9 @@ jobs:
             exit 1
           fi
 
-          # --- URL do smoke test ----------------------------------------------
-          # Precisa casar com os hosts declarados no ingress dos overlays.
-          if [ -z "$CLUSTER_IP" ]; then
-            echo "::warning::Variable SSH_HOST não configurada — smoke test será pulado."
-            HEALTH_URL=""
-          else
-            case "$SERVICE" in
-              api)       PREFIX="api";     HEALTH_PATH="/actuator/health" ;;
-              api-redis) PREFIX="ranking"; HEALTH_PATH="/actuator/health" ;;
-              chatbot)   PREFIX="chat";    HEALTH_PATH="/health" ;;
-            esac
-
-            if [ "$ENVIRONMENT" = "qa" ]; then
-              HOST="${PREFIX}.qa.${CLUSTER_IP}.sslip.io"
-            else
-              HOST="${PREFIX}.${CLUSTER_IP}.sslip.io"
-            fi
-
-            HEALTH_URL="http://${HOST}${HEALTH_PATH}"
+          if [ "$QA_SMOKE" = "true" ] && { [ "$ENVIRONMENT" != "qa" ] || [ "$SERVICE" != "chatbot" ]; }; then
+            echo "::error::qa-smoke only supports chatbot in QA."
+            exit 1
           fi
 
           {
@@ -125,7 +116,7 @@ jobs:
             echo "environment=${ENVIRONMENT}"
             echo "image=${IMAGE}"
             echo "image-tag=${TAG}"
-            echo "health-url=${HEALTH_URL}"
+            echo "qa-smoke=${QA_SMOKE}"
           } >> "$GITHUB_OUTPUT"
 
           echo "Implantar ${IMAGE}:${TAG} como '${SERVICE}' em '${ENVIRONMENT}'."
@@ -139,7 +130,6 @@ jobs:
       service: ${{ needs.resolve.outputs.service }}
       image: ${{ needs.resolve.outputs.image }}
       image-tag: ${{ needs.resolve.outputs.image-tag }}
-      health-url: ${{ needs.resolve.outputs.health-url }}
+      qa-smoke: ${{ needs.resolve.outputs.qa-smoke == 'true' }}
     secrets:
       ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
-      ssh-host: ${{ vars.SSH_HOST }}

@@ -30,7 +30,7 @@ baseado no IP do cluster (`vars.SSH_HOST`) e no ambiente:
 
 | Ambiente Vercel | API | Ranking (api-redis) | Chatbot |
 |---|---|---|---|
-| Preview (QA) | `http://api.qa.<SSH_HOST>.sslip.io` | `http://ranking.qa.<SSH_HOST>.sslip.io` | `http://chat.qa.<SSH_HOST>.sslip.io` |
+| Preview (QA) | `https://api.qa.<SSH_HOST>.sslip.io` | `https://ranking.qa.<SSH_HOST>.sslip.io` | `https://chat.qa.<SSH_HOST>.sslip.io` |
 | Production | `http://api.<SSH_HOST>.sslip.io` | `http://ranking.<SSH_HOST>.sslip.io` | `http://chat.<SSH_HOST>.sslip.io` |
 
 Cadastradas em *Settings → Environment Variables* no projeto Vercel, com o
