@@ -13,9 +13,8 @@
 #   ./scripts/rollback.sh prod api prod-a1b2c3d    # volta para uma tag exata
 #   ./scripts/rollback.sh prod api --history       # lista as revisões
 #
-# ATENÇÃO — o rollback altera o cluster sem passar pelo Git. Depois de estancar
-# o problema, reimplante a tag boa pela pipeline (workflow "Deploy" -> Run
-# workflow) para o repositório voltar a refletir o que está rodando.
+# ATENÇÃO — o rollback altera o cluster sem passar pelo workflow. Depois de
+# estancar o problema, registre a tag boa numa execução do workflow "Deploy".
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib-aws.sh
@@ -148,8 +147,8 @@ cat <<SUMMARY
   Antes       ${CURRENT}
   Agora       ${FINAL}
 
-  O cluster agora DIVERGE do Git. Para reconciliar, reimplante
-  esta mesma tag pela pipeline:
+  O overlay versionado não registra o rollback. Para registrar a tag e
+  reaplicar o serviço pela pipeline:
     GitHub -> Actions -> "Deploy" -> Run workflow
       service: ${SERVICE}
       environment: ${ENVIRONMENT}

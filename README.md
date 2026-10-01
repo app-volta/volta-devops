@@ -18,7 +18,7 @@ solução para descarte de resíduos em empresas.
 ```text
 Código → CI → imagem no GHCR (<env>-<sha>) → repository_dispatch
                                                     │
-                                     DevOps: kustomize edit set image + commit
+                                     DevOps: kustomize edit set image no runner
                                                     │
                                      SSH → kubectl apply -k → k3s (EC2)
 ```

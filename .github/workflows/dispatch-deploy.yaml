@@ -36,7 +36,7 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   resolve:
@@ -57,7 +57,6 @@ jobs:
           # repository_dispatch
           D_SERVICE: ${{ github.event.client_payload.service }}
           D_ENV: ${{ github.event.client_payload.env }}
-          D_IMAGE: ${{ github.event.client_payload.image }}
           D_TAG: ${{ github.event.client_payload.tag }}
           # workflow_dispatch
           W_SERVICE: ${{ inputs.service }}
@@ -68,13 +67,11 @@ jobs:
           OWNER: ${{ github.repository_owner }}
         run: |
           if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
-            SERVICE="$D_SERVICE"; ENVIRONMENT="$D_ENV"; TAG="$D_TAG"; IMAGE="$D_IMAGE"
+            SERVICE="$D_SERVICE"; ENVIRONMENT="$D_ENV"; TAG="$D_TAG"
             QA_SMOKE="false"
           else
             SERVICE="$W_SERVICE"; ENVIRONMENT="$W_ENV"; TAG="$W_TAG"
             QA_SMOKE="$W_QA_SMOKE"
-            IMAGE="ghcr.io/${OWNER}/${SERVICE}"
-            IMAGE="${IMAGE,,}"
           fi
 
           # --- Validação do payload -------------------------------------------
@@ -84,6 +81,9 @@ jobs:
             api|api-redis|chatbot) ;;
             *) echo "::error::Serviço inválido: '${SERVICE}'. Aceitos: api, api-redis, chatbot."; exit 1 ;;
           esac
+
+          IMAGE="ghcr.io/${OWNER}/${SERVICE}"
+          IMAGE="${IMAGE,,}"
 
           case "$ENVIRONMENT" in
             qa|prod) ;;
