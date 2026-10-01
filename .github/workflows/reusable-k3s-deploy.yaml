@@ -30,7 +30,7 @@ on:
         required: true
         type: string
       health-url:
-        description: URL pública para o smoke test. Vazio pula a verificação.
+        description: URL customizada para o smoke test; se vazia, é derivada de SSH_HOST.
         required: false
         type: string
         default: ''
@@ -39,12 +39,14 @@ on:
         required: false
         type: string
         default: 180s
+      qa-smoke:
+        description: Escala o chatbot em QA, testa HTTPS e retorna a zero.
+        required: false
+        type: boolean
+        default: false
     secrets:
       ssh-private-key:
         description: Chave privada de acesso à EC2
-        required: true
-      ssh-host:
-        description: Elastic IP da instância
         required: true
 
 permissions:
@@ -65,11 +67,14 @@ jobs:
     env:
       NAMESPACE: volta-${{ inputs.environment }}
       OVERLAY: kubernetes/overlays/${{ inputs.environment }}
+      ENVIRONMENT: ${{ inputs.environment }}
 
     steps:
       - name: Validar ambiente informado
         env:
           ENVIRONMENT: ${{ inputs.environment }}
+          SERVICE: ${{ inputs.service }}
+          QA_SMOKE: ${{ inputs.qa-smoke }}
         run: |
           case "$ENVIRONMENT" in
             qa|prod) echo "Ambiente OK: $ENVIRONMENT" ;;
@@ -78,6 +83,43 @@ jobs:
               exit 1
               ;;
           esac
+
+          if [ "$QA_SMOKE" = "true" ] && { [ "$ENVIRONMENT" != "qa" ] || [ "$SERVICE" != "chatbot" ]; }; then
+            echo "::error::qa-smoke only supports chatbot in QA."
+            exit 1
+          fi
+
+      - name: Resolver URL do health check
+        id: health
+        env:
+          SSH_HOST: ${{ vars.SSH_HOST }}
+          SERVICE: ${{ inputs.service }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          CUSTOM_HEALTH_URL: ${{ inputs.health-url }}
+        run: |
+          if [ -n "$CUSTOM_HEALTH_URL" ]; then
+            HEALTH_URL="$CUSTOM_HEALTH_URL"
+          else
+            if ! python3 -c 'import ipaddress, sys; ipaddress.IPv4Address(sys.argv[1])' "$SSH_HOST" 2>/dev/null; then
+              echo "::error::SSH_HOST ausente ou inválido no Environment ${ENVIRONMENT}."
+              exit 1
+            fi
+
+            case "$SERVICE" in
+              api)       PREFIX="api";     HEALTH_PATH="/actuator/health" ;;
+              api-redis) PREFIX="ranking"; HEALTH_PATH="/actuator/health" ;;
+              chatbot)   PREFIX="chat";    HEALTH_PATH="/health" ;;
+              *) echo "::error::Serviço sem health check configurado: ${SERVICE}."; exit 1 ;;
+            esac
+
+            if [ "$ENVIRONMENT" = "qa" ]; then
+              HEALTH_URL="https://${PREFIX}.qa.${SSH_HOST}.sslip.io${HEALTH_PATH}"
+            else
+              HEALTH_URL="http://${PREFIX}.${SSH_HOST}.sslip.io${HEALTH_PATH}"
+            fi
+          fi
+
+          echo "health-url=${HEALTH_URL}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout do DevOps
         uses: actions/checkout@v4
@@ -100,9 +142,16 @@ jobs:
         env:
           IMAGE: ${{ inputs.image }}
           IMAGE_TAG: ${{ inputs.image-tag }}
+          SSH_HOST: ${{ vars.SSH_HOST }}
         run: |
+          if ! python3 -c 'import ipaddress, sys; ipaddress.IPv4Address(sys.argv[1])' "$SSH_HOST" 2>/dev/null; then
+            echo "::error::SSH_HOST precisa ser o Elastic IP do cluster."
+            exit 1
+          fi
+
           cd "$OVERLAY"
           kustomize edit set image "${IMAGE}=${IMAGE}:${IMAGE_TAG}"
+          find . -type f -name '*.yaml' -exec sed -E -i "s/([.])([0-9]{1,3}[.]){3}[0-9]{1,3}([.]sslip[.]io)/\\1${SSH_HOST}\\3/g" {} +
           cd - > /dev/null
 
           if git diff --quiet -- "$OVERLAY"; then
@@ -141,7 +190,7 @@ jobs:
       - name: Preparar chave SSH
         env:
           SSH_PRIVATE_KEY: ${{ secrets.ssh-private-key }}
-          SSH_HOST: ${{ secrets.ssh-host }}
+          SSH_HOST: ${{ vars.SSH_HOST }}
         run: |
           mkdir -p ~/.ssh
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
@@ -150,7 +199,7 @@ jobs:
           # A instância pode ter sido recriada; aceitar a chave de host nova.
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
-          if ! ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+          if ! ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o ConnectTimeout=10 \
                -o BatchMode=yes "ec2-user@${SSH_HOST}" 'true'; then
             echo "::error::SSH falhou. A instância está ligada? Rode o workflow 'Ligar e desligar o cluster'."
             exit 1
@@ -158,31 +207,64 @@ jobs:
 
       - name: Enviar manifestos para a instância
         env:
-          SSH_HOST: ${{ secrets.ssh-host }}
+          SSH_HOST: ${{ vars.SSH_HOST }}
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "ec2-user@${SSH_HOST}" \
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "ec2-user@${SSH_HOST}" \
             'rm -rf ~/volta-devops/kubernetes && mkdir -p ~/volta-devops'
 
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -r \
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -r \
             kubernetes "ec2-user@${SSH_HOST}:~/volta-devops/"
+
+      - name: Instalar cert-manager em QA
+        if: inputs.environment == 'qa'
+        env:
+          SSH_HOST: ${{ vars.SSH_HOST }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "ec2-user@${SSH_HOST}" \
+            'kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.21.2/cert-manager.yaml && \
+             kubectl wait --for=condition=Available deployment --all -n cert-manager --timeout=180s'
 
       - name: Aplicar no cluster
         env:
-          SSH_HOST: ${{ secrets.ssh-host }}
+          SSH_HOST: ${{ vars.SSH_HOST }}
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "ec2-user@${SSH_HOST}" \
-            "kubectl apply -f ~/volta-devops/kubernetes/namespace.yaml && \
-             kubectl apply -k ~/volta-devops/${OVERLAY}"
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "ec2-user@${SSH_HOST}" \
+            'kubectl apply -f ~/volta-devops/kubernetes/namespace.yaml'
+
+          if [ "$ENVIRONMENT" = "qa" ]; then
+            ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "ec2-user@${SSH_HOST}" \
+              'kubectl apply -f ~/volta-devops/kubernetes/overlays/qa/cluster-issuer.yaml'
+          fi
+
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "ec2-user@${SSH_HOST}" \
+            "kubectl apply -k ~/volta-devops/${OVERLAY}"
+
+      - name: Escalar chatbot QA temporariamente
+        id: qa_scale
+        if: inputs.environment == 'qa' && inputs.qa-smoke
+        env:
+          SSH_HOST: ${{ vars.SSH_HOST }}
+        run: |
+          echo "attempted=true" >> "$GITHUB_OUTPUT"
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "ec2-user@${SSH_HOST}" \
+            'kubectl -n volta-qa scale deployment/chatbot --replicas=1'
 
       - name: Aguardar o rollout
         env:
-          SSH_HOST: ${{ secrets.ssh-host }}
+          SSH_HOST: ${{ vars.SSH_HOST }}
           SERVICE: ${{ inputs.service }}
           TIMEOUT: ${{ inputs.rollout-timeout }}
         run: |
+          if [ "$ENVIRONMENT" = "qa" ]; then
+            ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "ec2-user@${SSH_HOST}" \
+              'kubectl wait --for=condition=Ready clusterissuer/letsencrypt --timeout=120s && \
+               for i in $(seq 1 30); do kubectl -n volta-qa get certificate/volta-qa-tls >/dev/null 2>&1 && break; sleep 2; done && \
+               kubectl -n volta-qa wait --for=condition=Ready certificate/volta-qa-tls --timeout=300s'
+          fi
+
           # Em QA o Deployment nasce com replicas 0. Nesse caso não há rollout
           # para esperar: a imagem fica registrada e sobe quando alguém escalar.
-          REPLICAS=$(ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "ec2-user@${SSH_HOST}" \
+          REPLICAS=$(ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "ec2-user@${SSH_HOST}" \
             "kubectl -n ${NAMESPACE} get deployment/${SERVICE} -o jsonpath='{.spec.replicas}'")
 
           if [ "$REPLICAS" = "0" ]; then
@@ -193,21 +275,24 @@ jobs:
 
           # rollout status só retorna sucesso quando a readiness probe passa —
           # é a verificação real de que a aplicação subiu, não só o container.
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "ec2-user@${SSH_HOST}" \
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "ec2-user@${SSH_HOST}" \
             "kubectl -n ${NAMESPACE} rollout status deployment/${SERVICE} --timeout=${TIMEOUT}"
 
       - name: Smoke test pelo ingress
-        if: inputs.health-url != ''
+        id: smoke
+        if: steps.health.outputs.health-url != ''
         env:
-          HEALTH_URL: ${{ inputs.health-url }}
-          SSH_HOST: ${{ secrets.ssh-host }}
+          HEALTH_URL: ${{ steps.health.outputs.health-url }}
+          SSH_HOST: ${{ vars.SSH_HOST }}
           SERVICE: ${{ inputs.service }}
         run: |
-          REPLICAS=$(ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "ec2-user@${SSH_HOST}" \
+          echo "result=failed" >> "$GITHUB_OUTPUT"
+          REPLICAS=$(ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "ec2-user@${SSH_HOST}" \
             "kubectl -n ${NAMESPACE} get deployment/${SERVICE} -o jsonpath='{.spec.replicas}'")
 
           if [ "$REPLICAS" = "0" ]; then
             echo "Deployment com replicas=0 — smoke test pulado."
+            echo "result=skipped (replicas=0)" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -215,6 +300,7 @@ jobs:
           for i in $(seq 1 12); do
             if curl -fsS --max-time 10 "$HEALTH_URL" > /dev/null; then
               echo "Serviço respondeu na tentativa ${i}."
+              echo "result=passed" >> "$GITHUB_OUTPUT"
               exit 0
             fi
             echo "Tentativa ${i}/12 sem resposta. Aguardando 10s..."
@@ -223,7 +309,18 @@ jobs:
 
           echo "::error::O rollout concluiu, mas ${HEALTH_URL} não respondeu."
           echo "::error::Provável problema de ingress (host errado?) e não da aplicação."
+          echo "result=failed" >> "$GITHUB_OUTPUT"
           exit 1
+
+      - name: Restaurar chatbot QA em zero
+        id: qa_cleanup
+        if: always() && steps.qa_scale.outputs.attempted == 'true'
+        env:
+          SSH_HOST: ${{ vars.SSH_HOST }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "ec2-user@${SSH_HOST}" \
+            'kubectl -n volta-qa scale deployment/chatbot --replicas=0'
+          echo "restored=true" >> "$GITHUB_OUTPUT"
 
       - name: Limpar a chave SSH
         if: always()
@@ -241,7 +338,9 @@ jobs:
             echo "| Namespace | \`${{ env.NAMESPACE }}\` |"
             echo "| Imagem | \`${{ inputs.image }}:${{ inputs.image-tag }}\` |"
             echo "| Overlay commitado | ${{ steps.kustomize.outputs.changed == 'true' && 'sim' || 'não (já estava atualizado)' }} |"
-            echo "| Smoke test | ${{ inputs.health-url != '' && inputs.health-url || 'pulado' }} |"
+            echo "| Smoke test | ${{ steps.smoke.outputs.result || 'não executado' }} |"
+            echo "| URL do health check | ${{ steps.health.outputs.health-url || 'não configurada' }} |"
+            echo "| Replica QA restaurada | ${{ inputs.qa-smoke && steps.qa_cleanup.outputs.restored == 'true' && 'sim' || inputs.qa-smoke && 'não confirmado' || 'não aplicável' }} |"
             echo "| Resultado | ${{ job.status }} |"
             echo ""
             echo "Rollback: \`./scripts/rollback.sh ${{ inputs.environment }} ${{ inputs.service }}\`"

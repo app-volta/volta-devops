@@ -145,6 +145,13 @@ um período parado.
 **Deploy** acontece sozinho: ao mergear em `develop` ou `main`, o repositório da
 aplicação publica a imagem e avisa este repositório, que aplica no cluster.
 
+No primeiro deploy em QA, o workflow instala cert-manager e emite o certificado
+Let's Encrypt para os três hosts do Ingress usando HTTP-01. Portas 80 e 443
+precisam permanecer acessíveis; o health check de QA usa HTTPS. O chatbot fica
+em `https://chat.qa.<EIP>.sslip.io`.
+
+Para validar o chatbot pelo Ingress, use **Actions → Deploy → Run workflow**, selecione `chatbot`, `qa`, a tag QA e marque `qa-smoke`. O workflow escala uma réplica, aguarda readiness, valida `GET /health` com TLS e sempre tenta restaurar `replicas=0`, mesmo se o smoke falhar. Essa opção não executa sessão ou chat autenticados no app mobile; esses passos ainda exigem validação pelo cliente.
+
 Para reimplantar uma versão antiga sem rebuild: **Actions → "Deploy" → Run
 workflow**, informando serviço, ambiente e a tag (`prod-a1b2c3d`).
 
