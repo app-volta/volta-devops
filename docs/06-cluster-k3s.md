@@ -164,9 +164,9 @@ não quer depender do GitHub estar no ar nem esperar a pipeline:
 ./scripts/rollback.sh prod api --history       # só lista as revisões
 ```
 
-> Depois de um rollback pelo script, o cluster fica **divergente do Git**. Assim
-> que a poeira baixar, reimplante a mesma tag pela pipeline para reconciliar —
-> o script imprime o comando pronto no fim.
+> Depois de um rollback pelo script, registre a tag aplicada em uma execução do
+> workflow Deploy quando o serviço estiver recuperado. O script imprime os
+> valores necessários no fim.
 
 ---
 

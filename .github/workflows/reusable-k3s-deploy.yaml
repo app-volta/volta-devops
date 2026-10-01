@@ -3,12 +3,11 @@ name: Reusable - Deploy no k3s
 # Implanta uma imagem já publicada no GHCR dentro do cluster k3s.
 #
 # Fluxo:
-#   1. kustomize edit set image  -> fixa a tag imutável no overlay do ambiente
-#   2. commit + push             -> o Git passa a refletir o que está no cluster
-#   3. scp dos manifestos        -> leva o estado desejado para a instância
-#   4. kubectl apply -k          -> aplica
-#   5. kubectl rollout status    -> só retorna quando a readiness probe passa
-#   6. smoke test pelo ingress   -> valida o caminho completo (Traefik -> pod)
+#   1. kustomize edit set image  -> prepara a tag e o host no runner
+#   2. scp dos manifestos        -> leva o overlay desta execução para a instância
+#   3. kubectl apply -k          -> aplica
+#   4. kubectl rollout status    -> só retorna quando a readiness probe passa
+#   5. smoke test pelo ingress   -> valida o caminho completo (Traefik -> pod)
 
 on:
   workflow_call:
@@ -50,7 +49,7 @@ on:
         required: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   deploy:
@@ -58,8 +57,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
 
-    # Um deploy por ambiente de cada vez. `cancel-in-progress: false` porque
-    # cancelar um deploy pela metade deixa cluster e Git divergentes.
+    # Um deploy por ambiente de cada vez; não cancele uma alteração em andamento.
     concurrency:
       group: k3s-deploy-${{ inputs.environment }}
       cancel-in-progress: false
@@ -74,6 +72,9 @@ jobs:
         env:
           ENVIRONMENT: ${{ inputs.environment }}
           SERVICE: ${{ inputs.service }}
+          IMAGE: ${{ inputs.image }}
+          IMAGE_TAG: ${{ inputs.image-tag }}
+          TIMEOUT: ${{ inputs.rollout-timeout }}
           QA_SMOKE: ${{ inputs.qa-smoke }}
         run: |
           case "$ENVIRONMENT" in
@@ -84,8 +85,27 @@ jobs:
               ;;
           esac
 
+          case "$SERVICE" in
+            api|api-redis|chatbot) ;;
+            *) echo "::error::Serviço inválido: '${SERVICE}'."; exit 1 ;;
+          esac
+
           if [ "$QA_SMOKE" = "true" ] && { [ "$ENVIRONMENT" != "qa" ] || [ "$SERVICE" != "chatbot" ]; }; then
             echo "::error::qa-smoke only supports chatbot in QA."
+            exit 1
+          fi
+
+          EXPECTED_IMAGE="ghcr.io/app-volta/${SERVICE}"
+          if [ "$IMAGE" != "$EXPECTED_IMAGE" ]; then
+            echo "::error::Imagem '${IMAGE}' não corresponde ao serviço '${SERVICE}'."
+            exit 1
+          fi
+          if ! printf '%s' "$IMAGE_TAG" | grep -Eq '^(qa|prod)-[0-9a-f]{7}$' || [ "${IMAGE_TAG%%-*}" != "$ENVIRONMENT" ]; then
+            echo "::error::Tag '${IMAGE_TAG}' inválida para '${ENVIRONMENT}'."
+            exit 1
+          fi
+          if [[ ! "$TIMEOUT" =~ ^[1-9][0-9]*(s|m|h)$ ]]; then
+            echo "::error::rollout-timeout inválido. Use segundos, minutos ou horas (ex.: 180s)."
             exit 1
           fi
 
@@ -123,69 +143,6 @@ jobs:
 
       - name: Checkout do DevOps
         uses: actions/checkout@v4
-        with:
-          # Necessário para o push do overlay atualizado.
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Instalar kustomize
-        run: |
-          # Os runners hospedados pelo GitHub podem já trazer o binário.
-          # O instalador oficial falha se tentar sobrescrevê-lo.
-          if ! command -v kustomize >/dev/null 2>&1; then
-            curl -sfL https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh \
-              | bash -s -- 5.4.3 /usr/local/bin
-          fi
-          kustomize version
-
-      - name: Fixar a tag da imagem no overlay
-        id: kustomize
-        env:
-          IMAGE: ${{ inputs.image }}
-          IMAGE_TAG: ${{ inputs.image-tag }}
-          SSH_HOST: ${{ vars.SSH_HOST }}
-        run: |
-          if ! python3 -c 'import ipaddress, sys; ipaddress.IPv4Address(sys.argv[1])' "$SSH_HOST" 2>/dev/null; then
-            echo "::error::SSH_HOST precisa ser o Elastic IP do cluster."
-            exit 1
-          fi
-
-          cd "$OVERLAY"
-          kustomize edit set image "${IMAGE}=${IMAGE}:${IMAGE_TAG}"
-          find . -type f -name '*.yaml' -exec sed -E -i "s/([.])([0-9]{1,3}[.]){3}[0-9]{1,3}([.]sslip[.]io)/\\1${SSH_HOST}\\3/g" {} +
-          cd - > /dev/null
-
-          if git diff --quiet -- "$OVERLAY"; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "Overlay já apontava para ${IMAGE}:${IMAGE_TAG} — nada a commitar."
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            git --no-pager diff -- "$OVERLAY"
-          fi
-
-      - name: Commitar o overlay
-        if: steps.kustomize.outputs.changed == 'true'
-        env:
-          SERVICE: ${{ inputs.service }}
-          ENVIRONMENT: ${{ inputs.environment }}
-          IMAGE_TAG: ${{ inputs.image-tag }}
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "$OVERLAY"
-          git commit -m "chore(deploy): ${SERVICE} ${IMAGE_TAG} em ${ENVIRONMENT}"
-
-          # Dois serviços podem terminar o build ao mesmo tempo e disputar o push.
-          for i in 1 2 3; do
-            if git push; then
-              echo "Push concluído na tentativa ${i}."
-              exit 0
-            fi
-            echo "Push recusado (tentativa ${i}). Rebaseando..."
-            git pull --rebase --autostash
-          done
-
-          echo "::error::Não foi possível fazer push do overlay após 3 tentativas."
-          exit 1
 
       - name: Preparar chave SSH
         env:
@@ -203,6 +160,57 @@ jobs:
                -o BatchMode=yes "ec2-user@${SSH_HOST}" 'true'; then
             echo "::error::SSH falhou. A instância está ligada? Rode o workflow 'Ligar e desligar o cluster'."
             exit 1
+          fi
+
+      - name: Instalar kustomize
+        run: |
+          # Os runners hospedados pelo GitHub podem já trazer o binário.
+          # O instalador oficial falha se tentar sobrescrevê-lo.
+          if ! command -v kustomize >/dev/null 2>&1; then
+            curl -sfL https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh \
+              | bash -s -- 5.4.3 /usr/local/bin
+          fi
+          kustomize version
+
+      - name: Fixar a tag da imagem no overlay
+        id: kustomize
+        env:
+          IMAGE: ${{ inputs.image }}
+          IMAGE_TAG: ${{ inputs.image-tag }}
+          SSH_HOST: ${{ vars.SSH_HOST }}
+          NAMESPACE: volta-${{ inputs.environment }}
+        run: |
+          if ! python3 -c 'import ipaddress, sys; ipaddress.IPv4Address(sys.argv[1])' "$SSH_HOST" 2>/dev/null; then
+            echo "::error::SSH_HOST precisa ser o Elastic IP do cluster."
+            exit 1
+          fi
+
+          cd "$OVERLAY"
+          for service in api api-redis chatbot; do
+            current_image=$(ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "ec2-user@${SSH_HOST}" \
+              "kubectl -n ${NAMESPACE} get deployment/${service} -o jsonpath='{.spec.template.spec.containers[0].image}'")
+            if [ -z "$current_image" ]; then
+              echo "::error::Não foi possível ler a imagem atual de ${service}; deploy cancelado para preservar os outros serviços."
+              exit 1
+            fi
+            case "$service" in
+              api) output_name=api_image ;;
+              api-redis) output_name=api_redis_image ;;
+              chatbot) output_name=chatbot_image ;;
+            esac
+            echo "${output_name}=${current_image}" >> "$GITHUB_OUTPUT"
+            kustomize edit set image "ghcr.io/app-volta/${service}=${current_image}"
+          done
+          kustomize edit set image "${IMAGE}=${IMAGE}:${IMAGE_TAG}"
+          find . -type f -name '*.yaml' -exec sed -E -i "s/([.])([0-9]{1,3}[.]){3}[0-9]{1,3}([.]sslip[.]io)/\\1${SSH_HOST}\\3/g" {} +
+          cd - > /dev/null
+
+          if git diff --quiet -- "$OVERLAY"; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Overlay já está atualizado para ${IMAGE}:${IMAGE_TAG}."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git --no-pager diff -- "$OVERLAY"
           fi
 
       - name: Enviar manifestos para a instância
@@ -238,6 +246,30 @@ jobs:
 
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "ec2-user@${SSH_HOST}" \
             "kubectl apply -k ~/volta-devops/${OVERLAY}"
+
+      - name: Verificar imagens dos serviços não selecionados
+        env:
+          SSH_HOST: ${{ vars.SSH_HOST }}
+          SERVICE: ${{ inputs.service }}
+          API_IMAGE: ${{ steps.kustomize.outputs.api_image }}
+          API_REDIS_IMAGE: ${{ steps.kustomize.outputs.api_redis_image }}
+          CHATBOT_IMAGE: ${{ steps.kustomize.outputs.chatbot_image }}
+        run: |
+          for service in api api-redis chatbot; do
+            [ "$service" = "$SERVICE" ] && continue
+            case "$service" in
+              api) expected="$API_IMAGE" ;;
+              api-redis) expected="$API_REDIS_IMAGE" ;;
+              chatbot) expected="$CHATBOT_IMAGE" ;;
+            esac
+            current=$(ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "ec2-user@${SSH_HOST}" \
+              "kubectl -n ${NAMESPACE} get deployment/${service} -o jsonpath='{.spec.template.spec.containers[0].image}'")
+            if [ "$current" != "$expected" ]; then
+              echo "::error::A imagem de ${service} mudou de '${expected}' para '${current}' durante o deploy."
+              exit 1
+            fi
+          done
+          echo "As imagens dos serviços não selecionados foram preservadas."
 
       - name: Escalar chatbot QA temporariamente
         id: qa_scale
@@ -298,7 +330,7 @@ jobs:
 
           echo "Verificando ${HEALTH_URL}..."
           for i in $(seq 1 12); do
-            if curl -fsS --max-time 10 "$HEALTH_URL" > /dev/null; then
+            if curl -fsS --max-time 10 -- "$HEALTH_URL" > /dev/null; then
               echo "Serviço respondeu na tentativa ${i}."
               echo "result=passed" >> "$GITHUB_OUTPUT"
               exit 0
@@ -328,20 +360,31 @@ jobs:
 
       - name: Registrar resumo
         if: always()
+        env:
+          SERVICE: ${{ inputs.service }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          IMAGE: ${{ inputs.image }}
+          IMAGE_TAG: ${{ inputs.image-tag }}
+          HEALTH_URL: ${{ steps.health.outputs.health-url }}
+          QA_SMOKE: ${{ inputs.qa-smoke }}
+          OVERLAY_CHANGED: ${{ steps.kustomize.outputs.changed }}
+          SMOKE_RESULT: ${{ steps.smoke.outputs.result }}
+          QA_RESTORED: ${{ steps.qa_cleanup.outputs.restored }}
+          JOB_STATUS: ${{ job.status }}
         run: |
           {
-            echo "### Deploy — ${{ inputs.service }} em ${{ inputs.environment }}"
+            echo "### Deploy — ${SERVICE} em ${ENVIRONMENT}"
             echo ""
             echo "| Campo | Valor |"
             echo "|---|---|"
-            echo "| Serviço | \`${{ inputs.service }}\` |"
-            echo "| Namespace | \`${{ env.NAMESPACE }}\` |"
-            echo "| Imagem | \`${{ inputs.image }}:${{ inputs.image-tag }}\` |"
-            echo "| Overlay commitado | ${{ steps.kustomize.outputs.changed == 'true' && 'sim' || 'não (já estava atualizado)' }} |"
-            echo "| Smoke test | ${{ steps.smoke.outputs.result || 'não executado' }} |"
-            echo "| URL do health check | ${{ steps.health.outputs.health-url || 'não configurada' }} |"
-            echo "| Replica QA restaurada | ${{ inputs.qa-smoke && steps.qa_cleanup.outputs.restored == 'true' && 'sim' || inputs.qa-smoke && 'não confirmado' || 'não aplicável' }} |"
-            echo "| Resultado | ${{ job.status }} |"
+            echo "| Serviço | \`${SERVICE}\` |"
+            echo "| Namespace | \`${NAMESPACE}\` |"
+            echo "| Imagem | \`${IMAGE}:${IMAGE_TAG}\` |"
+            echo "| Overlay alterado nesta execução | $([ "$OVERLAY_CHANGED" = 'true' ] && echo 'sim' || echo 'não (tag e host já correspondiam)') |"
+            echo "| Smoke test | ${SMOKE_RESULT:-não executado} |"
+            echo "| URL do health check | ${HEALTH_URL:-não configurada} |"
+            echo "| Replica QA restaurada | $([ "$QA_SMOKE" = 'true' ] && [ "$QA_RESTORED" = 'true' ] && echo 'sim' || [ "$QA_SMOKE" = 'true' ] && echo 'não confirmado' || echo 'não aplicável') |"
+            echo "| Resultado | ${JOB_STATUS} |"
             echo ""
-            echo "Rollback: \`./scripts/rollback.sh ${{ inputs.environment }} ${{ inputs.service }}\`"
+            echo "Rollback: \`./scripts/rollback.sh ${ENVIRONMENT} ${SERVICE}\`"
           } >> "$GITHUB_STEP_SUMMARY"

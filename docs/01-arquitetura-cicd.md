@@ -712,29 +712,31 @@ binário não existe, evitando o erro do instalador ao tentar sobrescrever
 
 Responsabilidades previstas:
 
-1. `kustomize edit set image <service>=<image>:<tag>` no overlay do ambiente;
-2. commit e push do overlay no próprio DevOps (o Git vira o histórico do que
-   está implantado);
-3. SSH na EC2 e `kubectl apply -k kubernetes/overlays/<env>`;
-4. `kubectl rollout status` e smoke test no health check;
-5. resumo da implantação no `GITHUB_STEP_SUMMARY`.
+1. lê as imagens atuais dos três Deployments por SSH e preserva as dos serviços não selecionados no overlay temporário;
+2. `kustomize edit set image <service>=<image>:<tag>` no overlay do ambiente no runner;
+3. substituição do IP nos hosts e envio do overlay por SSH para a EC2;
+4. `kubectl apply -k kubernetes/overlays/<env>`;
+5. verifica se as imagens dos outros dois serviços continuam iguais;
+6. `kubectl rollout status` e smoke test no health check;
+7. resumo da implantação no `GITHUB_STEP_SUMMARY`.
+
+O workflow não commita o overlay: as regras do repositório exigem que mudanças
+em `main` passem por Pull Request. A tag e o resultado ficam no resumo e no
+histórico da execução do Actions.
 
 Declara `environment: ${{ inputs.environment }}` — é esse job que fica parado
 esperando a aprovação em produção. Em ordem:
 
-1. `kustomize edit set image` no overlay do ambiente;
-2. commit e push do overlay no próprio DevOps (o Git vira o histórico do que
-   está implantado);
-3. `scp` da pasta `kubernetes/` para a instância — o runner já tem o commit
-   exato em mãos, o que evita a instância ficar dessincronizada;
-4. `kubectl apply -k kubernetes/overlays/<env>`;
-5. `kubectl rollout status` — só retorna sucesso quando a readiness probe passa,
+1. `kustomize edit set image` e resolução do IP no overlay temporário do runner;
+2. `scp` da pasta `kubernetes/` para a instância;
+3. `kubectl apply -k kubernetes/overlays/<env>`;
+4. `kubectl rollout status` — só retorna sucesso quando a readiness probe passa,
    e é essa a verificação real de que a aplicação subiu;
-6. smoke test opcional pelo ingress, que valida o caminho completo (Traefik →
+5. smoke test opcional pelo ingress, que valida o caminho completo (Traefik →
    Service → pod) que o `rollout status` sozinho não cobre.
 
-Quando o Deployment está com `replicas: 0` (o padrão em QA), os passos 5 e 6 são
-pulados com um aviso: a imagem fica registrada no manifesto e sobe quando
+Quando o Deployment está com `replicas: 0` (o padrão em QA), o rollout e o
+smoke test são pulados com um aviso. A imagem fica preparada para subir quando
 alguém escalar.
 
 ### 11.3.1 `dispatch-deploy.yaml`
@@ -1142,8 +1144,9 @@ kubernetes/
     └── prod/{kustomization,configmap,resources-patch}.yaml
 ```
 
-O deploy roda `kustomize edit set image` no overlay, commita e aplica. O estado
-desejado fica versionado no Git — é GitOps sem Argo CD.
+O deploy roda `kustomize edit set image` no overlay temporário do runner e aplica
+os manifestos na EC2. A tag e o resultado ficam no histórico do GitHub Actions;
+os valores específicos do deploy não são gravados em `main`.
 
 **Autenticação do deploy: SSH.** O Learner Lab não permite criar roles IAM, o
 que elimina OIDC e SSM. Sobra chave SSH: pública no `authorized_keys` da
@@ -1291,7 +1294,7 @@ DevOps/
    build-test  ──►  docker-build-push  ──►  repository_dispatch ──► DevOps
                     ┌──────────────────────┐    ┌───────────────────────────┐
                     │ login GHCR           │    │ kustomize edit set image  │
-                    │ build amd64          │    │ commit no DevOps          │
+                    │ build amd64          │    │ preserva imagens atuais  │
                     │ tags: qa-a1b2c3d, qa │    │ ssh: kubectl apply -k qa  │
                     │ push                 │    │ rollout status + /health  │
                     └──────────────────────┘    └─────────────┬─────────────┘
@@ -1431,8 +1434,8 @@ diferença entre processo pesado e processo bem colocado.
 ### Rollback
 
 **1. `kubectl rollout undo` (segundos).** Volta o Deployment para a revisão
-anterior direto no cluster. É o estanca-sangramento — mas deixa o cluster
-divergente do Git, então precisa ser seguido de 2 ou 3.
+anterior direto no cluster. É o estanca-sangramento; registre a tag estável
+em uma execução do workflow depois que o serviço estiver recuperado.
 
 ```bash
 kubectl -n volta-prod rollout undo deployment/api
@@ -1440,11 +1443,12 @@ kubectl -n volta-prod rollout undo deployment/api
 
 **2. Redeploy de uma tag `<env>-<sha>` anterior (1–2 minutos).** É para isso que
 as tags imutáveis existem: dispare o workflow de deploy via `workflow_dispatch`
-informando a tag antiga. Sem rebuild, sem PR, sem esperar CI. Como o overlay é
-commitado, o Git volta a refletir o cluster.
+informando a tag antiga. Sem rebuild, sem PR, sem esperar CI. O workflow lê e
+preserva as imagens atuais dos outros serviços antes de aplicar o overlay.
 
-**3. `git revert` do merge commit em `main`** → PR → pipeline normal. Os dois
-primeiros estancam o sangramento; este resolve.
+**3. `git revert` de uma mudança de infraestrutura/manifests** → PR → pipeline
+normal. Isso reverte uma mudança versionada que causou o incidente; para uma
+regressão isolada da aplicação, redeploy da tag anterior é o procedimento.
 
 Para o Website, a Vercel promove um deployment anterior pelo painel.
 
@@ -1535,7 +1539,7 @@ isolamento entre ambientes — o problema que o Aiven exigiria resolver na mão.
 | Configuração | PAT + chave SSH | Role IAM + agente | Controlador no cluster |
 | Fixa tag imutável | ✅ via kustomize | ✅ | ✅ |
 | Viável no Learner Lab | **Sim** | **Não** (sem IAM) | Sim, mas pesa no nó |
-| Estado versionado no Git | Sim (commit do overlay) | Não | Sim |
+| Estado versionado no Git | Não (histórico do Actions) | Não | Sim |
 
 ### 23.8 Modelo de branching
 
@@ -1590,8 +1594,8 @@ Mudanças concretas registradas:
 ### O que ficou de fora, e por quê
 
 - **Argo CD / Flux.** O controlador consumiria memória do nó único que é
-  justamente o recurso escasso. O commit do overlay já dá o histórico
-  auditável, que era o principal ganho do GitOps aqui.
+  justamente o recurso escasso. O histórico de execução do Actions registra
+  tags e resultados de deploy sem exigir um controlador no cluster.
 - **Sealed Secrets.** `kubectl create secret` manual, uma vez por namespace.
 - **Cluster multi-nó.** Alta disponibilidade custaria cerca de 4x o orçamento
   sem agregar ao que é avaliado. Nó único é ponto único de falha — decisão
