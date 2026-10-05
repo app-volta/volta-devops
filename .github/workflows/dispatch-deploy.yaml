@@ -1,0 +1,135 @@
+name: Deploy
+
+# Ponto de entrada do deploy. Dois gatilhos:
+#
+#   1. repository_dispatch — automático. Os repositórios de aplicação disparam
+#      logo depois de publicar a imagem no GHCR (veja
+#      reusable-docker-build-push.yaml no repositório de origem).
+#
+#   2. workflow_dispatch — manual. Para reimplantar uma tag antiga sem precisar
+#      de rebuild: é o caminho de rollback pela interface do GitHub.
+
+on:
+  repository_dispatch:
+    types: [deploy]
+
+  workflow_dispatch:
+    inputs:
+      service:
+        description: Serviço a implantar
+        required: true
+        type: choice
+        options: [api, api-redis, chatbot]
+      environment:
+        description: Ambiente alvo
+        required: true
+        type: choice
+        options: [qa, prod]
+      qa-smoke:
+        description: Escala o chatbot QA, testa HTTPS e restaura replicas=0.
+        required: false
+        type: boolean
+        default: false
+      image-tag:
+        description: Tag imutável (ex.- qa-a1b2c3d). Deve existir no GHCR.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    name: resolve
+    runs-on: ubuntu-latest
+
+    outputs:
+      service: ${{ steps.payload.outputs.service }}
+      environment: ${{ steps.payload.outputs.environment }}
+      image: ${{ steps.payload.outputs.image }}
+      image-tag: ${{ steps.payload.outputs.image-tag }}
+      qa-smoke: ${{ steps.payload.outputs.qa-smoke == 'true' }}
+
+    steps:
+      - name: Normalizar a origem do gatilho
+        id: payload
+        env:
+          # repository_dispatch
+          D_SERVICE: ${{ github.event.client_payload.service }}
+          D_ENV: ${{ github.event.client_payload.env }}
+          D_TAG: ${{ github.event.client_payload.tag }}
+          # workflow_dispatch
+          W_SERVICE: ${{ inputs.service }}
+          W_ENV: ${{ inputs.environment }}
+          W_TAG: ${{ inputs.image-tag }}
+          W_QA_SMOKE: ${{ inputs.qa-smoke }}
+          # comum
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            SERVICE="$D_SERVICE"; ENVIRONMENT="$D_ENV"; TAG="$D_TAG"
+            QA_SMOKE="false"
+          else
+            SERVICE="$W_SERVICE"; ENVIRONMENT="$W_ENV"; TAG="$W_TAG"
+            QA_SMOKE="$W_QA_SMOKE"
+          fi
+
+          # --- Validação do payload -------------------------------------------
+          # O dispatch vem de fora deste repositório: nada do que ele manda pode
+          # ser usado sem conferir.
+          case "$SERVICE" in
+            api|api-redis|chatbot) ;;
+            *) echo "::error::Serviço inválido: '${SERVICE}'. Aceitos: api, api-redis, chatbot."; exit 1 ;;
+          esac
+
+          IMAGE="ghcr.io/${OWNER}/${SERVICE}"
+          IMAGE="${IMAGE,,}"
+
+          case "$ENVIRONMENT" in
+            qa|prod) ;;
+            *) echo "::error::Ambiente inválido: '${ENVIRONMENT}'. Aceitos: qa, prod."; exit 1 ;;
+          esac
+
+          if [ -z "$TAG" ]; then
+            echo "::error::Tag da imagem não informada."
+            exit 1
+          fi
+
+          if ! printf '%s' "$TAG" | grep -Eq '^(qa|prod)-[0-9a-f]{7}$'; then
+            echo "::error::Tag fora do padrão esperado '<env>-<sha7>': '${TAG}'."
+            exit 1
+          fi
+
+          if [ "${TAG%%-*}" != "$ENVIRONMENT" ]; then
+            echo "::error::A tag '${TAG}' não pertence ao ambiente '${ENVIRONMENT}'."
+            echo "::error::Implantar imagem de QA em produção é exatamente o que este check impede."
+            exit 1
+          fi
+
+          if [ "$QA_SMOKE" = "true" ] && { [ "$ENVIRONMENT" != "qa" ] || [ "$SERVICE" != "chatbot" ]; }; then
+            echo "::error::qa-smoke only supports chatbot in QA."
+            exit 1
+          fi
+
+          {
+            echo "service=${SERVICE}"
+            echo "environment=${ENVIRONMENT}"
+            echo "image=${IMAGE}"
+            echo "image-tag=${TAG}"
+            echo "qa-smoke=${QA_SMOKE}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Implantar ${IMAGE}:${TAG} como '${SERVICE}' em '${ENVIRONMENT}'."
+
+  deploy:
+    name: deploy
+    needs: resolve
+    uses: ./.github/workflows/reusable-k3s-deploy.yaml
+    with:
+      environment: ${{ needs.resolve.outputs.environment }}
+      service: ${{ needs.resolve.outputs.service }}
+      image: ${{ needs.resolve.outputs.image }}
+      image-tag: ${{ needs.resolve.outputs.image-tag }}
+      qa-smoke: ${{ needs.resolve.outputs.qa-smoke == 'true' }}
+    secrets:
+      ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}

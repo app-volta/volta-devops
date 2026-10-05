@@ -1,0 +1,15 @@
+# Produção recebe mais folga de memória e CPU que a base.
+#
+# Os valores continuam modestos de propósito: os dois ambientes dividem os
+# 4 GB da t3.medium, e QA precisa conseguir subir quando alguém for validar.
+#
+# O alvo (todos os Deployments) é declarado em kustomization.yaml.
+- op: replace
+  path: /spec/template/spec/containers/0/resources
+  value:
+    requests:
+      cpu: "300m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"

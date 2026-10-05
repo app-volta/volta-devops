@@ -1,0 +1,16 @@
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: volta-qa
+  labels:
+    app.kubernetes.io/part-of: volta
+    environment: qa
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: volta-prod
+  labels:
+    app.kubernetes.io/part-of: volta
+    environment: prod

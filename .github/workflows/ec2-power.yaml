@@ -1,0 +1,180 @@
+name: Ligar e desligar o cluster
+
+# Sobe a EC2 do k3s sob demanda, sem precisar de AWS CLI na máquina de quem pede.
+#
+# ATENÇÃO — credenciais do AWS Academy Learner Lab expiram a cada 4 horas.
+# Este workflow depende dos secrets AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY e
+# AWS_SESSION_TOKEN, que precisam ser recolados a cada sessão do lab (em
+# "AWS Details" -> "AWS CLI"). Não há alternativa: o lab não permite criar
+# roles IAM, o que inviabiliza OIDC. Quando expirarem, este workflow falha com
+# erro de credencial — basta recolar os três secrets e rodar de novo.
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: O que fazer com a instância
+        required: true
+        type: choice
+        default: start
+        options: [start, stop, status]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ec2-power
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  INSTANCE_NAME: volta-k3s
+
+jobs:
+  power:
+    name: power
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Configurar credenciais da sessão do Learner Lab
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+        run: |
+          if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SESSION_TOKEN" ]; then
+            echo "::error::Credenciais da sessão ausentes ou incompletas."
+            echo "::error::Atualize AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY e AWS_SESSION_TOKEN."
+            exit 1
+          fi
+
+          mkdir -p ~/.aws
+          {
+            echo "[default]"
+            echo "aws_access_key_id=${AWS_ACCESS_KEY_ID}"
+            echo "aws_secret_access_key=${AWS_SECRET_ACCESS_KEY}"
+            echo "aws_session_token=${AWS_SESSION_TOKEN}"
+            echo "region=${AWS_REGION}"
+          } > ~/.aws/credentials
+          chmod 600 ~/.aws/credentials
+
+          if ! aws sts get-caller-identity > /dev/null 2>&1; then
+            echo "::error::Credenciais recusadas pela AWS — provavelmente expiraram (validade de 4h no Learner Lab)."
+            exit 1
+          fi
+
+      - name: Localizar a instância
+        id: instance
+        run: |
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --region "$AWS_REGION" \
+            --filters "Name=tag:Name,Values=${INSTANCE_NAME}" \
+                      "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+            --query 'Reservations[].Instances[0].InstanceId' \
+            --output text | head -1)
+
+          if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" = "None" ]; then
+            echo "::error::Instância '${INSTANCE_NAME}' não encontrada. Rode scripts/provision-ec2-k3s.sh primeiro."
+            exit 1
+          fi
+
+          STATE=$(aws ec2 describe-instances --region "$AWS_REGION" \
+            --instance-ids "$INSTANCE_ID" \
+            --query 'Reservations[0].Instances[0].State.Name' --output text)
+
+          {
+            echo "id=${INSTANCE_ID}"
+            echo "state=${STATE}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Instância ${INSTANCE_ID} está ${STATE}."
+
+      - name: Ligar a instância
+        if: inputs.action == 'start'
+        env:
+          INSTANCE_ID: ${{ steps.instance.outputs.id }}
+          STATE: ${{ steps.instance.outputs.state }}
+        run: |
+          if [ "$STATE" = "running" ]; then
+            echo "Já está running."
+          else
+            aws ec2 start-instances --region "$AWS_REGION" --instance-ids "$INSTANCE_ID"
+            aws ec2 wait instance-running --region "$AWS_REGION" --instance-ids "$INSTANCE_ID"
+            echo "Instância running."
+          fi
+
+      - name: Desligar a instância
+        if: inputs.action == 'stop'
+        env:
+          INSTANCE_ID: ${{ steps.instance.outputs.id }}
+          STATE: ${{ steps.instance.outputs.state }}
+        run: |
+          if [ "$STATE" = "stopped" ]; then
+            echo "Já está parada."
+          else
+            aws ec2 stop-instances --region "$AWS_REGION" --instance-ids "$INSTANCE_ID"
+            aws ec2 wait instance-stopped --region "$AWS_REGION" --instance-ids "$INSTANCE_ID"
+            echo "Instância parada."
+          fi
+
+      - name: Aguardar o k3s responder
+        if: inputs.action == 'start'
+        env:
+          INSTANCE_ID: ${{ steps.instance.outputs.id }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          IP=$(aws ec2 describe-instances --region "$AWS_REGION" \
+            --instance-ids "$INSTANCE_ID" \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
+
+          if [ -z "$SSH_PRIVATE_KEY" ]; then
+            echo "::warning::SSH_PRIVATE_KEY não configurado — pulando a verificação do cluster."
+            echo "Instância no ar em ${IP}."
+            exit 0
+          fi
+
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+          for i in $(seq 1 30); do
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes \
+                 -i ~/.ssh/id_rsa "ec2-user@${IP}" 'kubectl get nodes' > /dev/null 2>&1; then
+              echo "Cluster pronto na tentativa ${i}."
+              exit 0
+            fi
+            echo "Tentativa ${i}/30 — k3s ainda não responde. Aguardando 10s..."
+            sleep 10
+          done
+
+          echo "::error::O k3s não respondeu após 5 minutos."
+          exit 1
+
+      - name: Registrar resumo
+        if: always()
+        env:
+          INSTANCE_ID: ${{ steps.instance.outputs.id }}
+        run: |
+          IP=$(aws ec2 describe-instances --region "$AWS_REGION" \
+            --instance-ids "$INSTANCE_ID" \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' --output text 2>/dev/null || echo "-")
+          STATE=$(aws ec2 describe-instances --region "$AWS_REGION" \
+            --instance-ids "$INSTANCE_ID" \
+            --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "-")
+
+          {
+            echo "### Cluster k3s — ${{ inputs.action }}"
+            echo ""
+            echo "| Campo | Valor |"
+            echo "|---|---|"
+            echo "| Instância | \`${INSTANCE_ID}\` |"
+            echo "| Estado | \`${STATE}\` |"
+            echo "| IP público | \`${IP}\` |"
+            echo "| Disparado por | @${{ github.actor }} |"
+            echo "| Resultado | ${{ job.status }} |"
+            echo ""
+            echo "A instância para sozinha após ~15 min sem tráfego de rede."
+          } >> "$GITHUB_STEP_SUMMARY"

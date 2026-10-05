@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-redis
+  labels:
+    app: api-redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api-redis
+  template:
+    metadata:
+      labels:
+        app: api-redis
+    spec:
+      containers:
+        - name: api-redis
+          image: ghcr.io/app-volta/api-redis:latest
+          ports:
+            - containerPort: 8081
+          envFrom:
+            - configMapRef:
+                name: api-redis-config
+            - secretRef:
+                name: api-redis-secrets
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8081
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8081
+            initialDelaySeconds: 30
+            periodSeconds: 15

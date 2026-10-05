@@ -4,11 +4,19 @@ on:
   workflow_call:
     inputs:
       image-name:
+<<<<<<< HEAD
         description: Nome da imagem no GHCR (ex.- api, chatbot)
         required: true
         type: string
       environment:
         description: Ambiente alvo (qa ou prod). Define o prefixo da tag.
+=======
+        description: Nome da imagem no GHCR (api, api-redis ou chatbot)
+        required: true
+        type: string
+      environment:
+        description: Ambiente alvo (qa ou prod) — define o prefixo da tag
+>>>>>>> 6a13929fb089792bfc872d07faf85cb0c8089103
         required: true
         type: string
       context:
@@ -22,27 +30,48 @@ on:
         type: string
         default: ./Dockerfile
       push:
+<<<<<<< HEAD
         description: Se falso, apenas constrói (sem publicar e sem notificar o DevOps)
+=======
+        description: Se falso, apenas constrói (sem publicar)
+>>>>>>> 6a13929fb089792bfc872d07faf85cb0c8089103
         required: false
         type: boolean
         default: true
       notify-devops:
+<<<<<<< HEAD
         description: Se verdadeiro, dispara repository_dispatch para o repositório DevOps
         required: false
         type: boolean
         default: true
       devops-repository:
         description: Repositório DevOps que recebe o repository_dispatch
+=======
+        description: Dispara o deploy no repositório DevOps após publicar
+        required: false
+        type: boolean
+        default: false
+      devops-repository:
+        description: Repositório que recebe o repository_dispatch
+>>>>>>> 6a13929fb089792bfc872d07faf85cb0c8089103
         required: false
         type: string
         default: app-volta/volta-devops
     secrets:
       devops-dispatch-token:
+<<<<<<< HEAD
         description: PAT com escopo de escrita no repositório DevOps (necessário para notify-devops)
         required: false
     outputs:
       image:
         description: Nome completo da imagem (sem tag)
+=======
+        description: PAT com escrita no DevOps. Obrigatório se notify-devops.
+        required: false
+    outputs:
+      image:
+        description: Imagem sem tag (ex.- ghcr.io/app-volta/api)
+>>>>>>> 6a13929fb089792bfc872d07faf85cb0c8089103
         value: ${{ jobs.docker.outputs.image }}
       image-tag:
         description: Tag imutável gerada (ex.- qa-a1b2c3d)
@@ -62,6 +91,7 @@ jobs:
       image-tag: ${{ steps.meta.outputs.image-tag }}
 
     steps:
+<<<<<<< HEAD
       - name: Validar ambiente informado
         env:
           ENVIRONMENT: ${{ inputs.environment }}
@@ -74,6 +104,8 @@ jobs:
               ;;
           esac
 
+=======
+>>>>>>> 6a13929fb089792bfc872d07faf85cb0c8089103
       - name: Checkout do código
         uses: actions/checkout@v4
 
@@ -85,10 +117,22 @@ jobs:
           ENVIRONMENT: ${{ inputs.environment }}
           COMMIT_SHA: ${{ github.sha }}
         run: |
+<<<<<<< HEAD
+=======
+          # A tag carrega o ambiente porque é o que impede promover uma imagem
+          # de QA para produção sem passar pelo build de produção.
+          case "$ENVIRONMENT" in
+            qa)   MOVING_TAG="qa" ;;
+            prod) MOVING_TAG="latest" ;;
+            *) echo "::error::Ambiente inválido: '${ENVIRONMENT}'. Aceitos: qa, prod."; exit 1 ;;
+          esac
+
+>>>>>>> 6a13929fb089792bfc872d07faf85cb0c8089103
           SHORT_SHA="${COMMIT_SHA:0:7}"
           IMAGE="ghcr.io/${OWNER}/${IMAGE_NAME}"
           IMAGE="${IMAGE,,}"
 
+<<<<<<< HEAD
           IMAGE_TAG="${ENVIRONMENT}-${SHORT_SHA}"
 
           # Tag imutável (usada no deploy) + tag móvel do ambiente (conveniência)
@@ -97,6 +141,15 @@ jobs:
           {
             echo "image=${IMAGE}"
             echo "image-tag=${IMAGE_TAG}"
+=======
+          IMMUTABLE_TAG="${ENVIRONMENT}-${SHORT_SHA}"
+          TAGS="${IMAGE}:${IMMUTABLE_TAG},${IMAGE}:${MOVING_TAG}"
+
+          {
+            echo "image=${IMAGE}"
+            echo "image-tag=${IMMUTABLE_TAG}"
+            echo "moving-tag=${MOVING_TAG}"
+>>>>>>> 6a13929fb089792bfc872d07faf85cb0c8089103
             echo "tags=${TAGS}"
           } >> "$GITHUB_OUTPUT"
 
@@ -128,7 +181,11 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+<<<<<<< HEAD
       - name: Notificar o repositório DevOps
+=======
+      - name: Avisar o DevOps para implantar
+>>>>>>> 6a13929fb089792bfc872d07faf85cb0c8089103
         if: inputs.push && inputs.notify-devops
         env:
           DISPATCH_TOKEN: ${{ secrets.devops-dispatch-token }}
@@ -136,6 +193,7 @@ jobs:
           SERVICE: ${{ inputs.image-name }}
           ENVIRONMENT: ${{ inputs.environment }}
           IMAGE: ${{ steps.meta.outputs.image }}
+<<<<<<< HEAD
           IMAGE_TAG: ${{ steps.meta.outputs.image-tag }}
         run: |
           if [ -z "$DISPATCH_TOKEN" ]; then
@@ -154,6 +212,23 @@ jobs:
                service: $service, env: $env, image: $image,
                tag: $tag, commit: $sha, source_repository: $repo
              }}')
+=======
+          TAG: ${{ steps.meta.outputs.image-tag }}
+          COMMIT_SHA: ${{ github.sha }}
+          SOURCE_REPO: ${{ github.repository }}
+        run: |
+          # O GITHUB_TOKEN do repositório de origem NÃO dispara dispatch
+          # cross-repo. Falhar explicitamente é melhor que um deploy silencioso
+          # que nunca acontece.
+          if [ -z "$DISPATCH_TOKEN" ]; then
+            echo "::error::Secret 'devops-dispatch-token' ausente — impossível disparar o deploy."
+            echo "::error::Crie um PAT com escrita em ${DEVOPS_REPO} e salve como DEVOPS_DISPATCH_TOKEN."
+            exit 1
+          fi
+
+          PAYLOAD=$(printf '{"event_type":"deploy","client_payload":{"service":"%s","env":"%s","image":"%s","tag":"%s","commit":"%s","source_repository":"%s"}}' \
+            "$SERVICE" "$ENVIRONMENT" "$IMAGE" "$TAG" "$COMMIT_SHA" "$SOURCE_REPO")
+>>>>>>> 6a13929fb089792bfc872d07faf85cb0c8089103
 
           HTTP_CODE=$(curl -sS -o /tmp/dispatch.out -w '%{http_code}' \
             -X POST "https://api.github.com/repos/${DEVOPS_REPO}/dispatches" \
@@ -163,12 +238,20 @@ jobs:
             -d "$PAYLOAD")
 
           if [ "$HTTP_CODE" != "204" ]; then
+<<<<<<< HEAD
             echo "::error::repository_dispatch falhou (HTTP ${HTTP_CODE})."
+=======
+            echo "::error::Dispatch para ${DEVOPS_REPO} falhou (HTTP ${HTTP_CODE})."
+>>>>>>> 6a13929fb089792bfc872d07faf85cb0c8089103
             cat /tmp/dispatch.out
             exit 1
           fi
 
+<<<<<<< HEAD
           echo "DevOps notificado: ${SERVICE} / ${ENVIRONMENT} / ${IMAGE_TAG}"
+=======
+          echo "Deploy de ${SERVICE} (${ENVIRONMENT}) solicitado ao ${DEVOPS_REPO}."
+>>>>>>> 6a13929fb089792bfc872d07faf85cb0c8089103
 
       - name: Registrar resumo da publicação
         if: inputs.push
@@ -180,8 +263,15 @@ jobs:
             echo "|---|---|"
             echo "| Imagem | \`${{ steps.meta.outputs.image }}\` |"
             echo "| Tag imutável | \`${{ steps.meta.outputs.image-tag }}\` |"
+<<<<<<< HEAD
             echo "| Tag móvel | \`${{ inputs.environment }}\` |"
             echo "| Ambiente | \`${{ inputs.environment }}\` |"
             echo "| Commit | \`${{ github.sha }}\` |"
             echo "| DevOps notificado | ${{ inputs.notify-devops && 'sim' || 'não' }} |"
+=======
+            echo "| Tag móvel | \`${{ steps.meta.outputs.moving-tag }}\` |"
+            echo "| Ambiente | \`${{ inputs.environment }}\` |"
+            echo "| Commit | \`${{ github.sha }}\` |"
+            echo "| Deploy disparado | \`${{ inputs.notify-devops }}\` |"
+>>>>>>> 6a13929fb089792bfc872d07faf85cb0c8089103
           } >> "$GITHUB_STEP_SUMMARY"

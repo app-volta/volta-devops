@@ -1,0 +1,33 @@
+# Configuração NÃO sensível do ambiente de produção.
+#
+# Senha de banco, chave de LLM e JWT_SECRET NÃO entram aqui — eles vivem em
+# Secrets criados manualmente no cluster (`kubectl create secret`), porque este
+# arquivo é versionado em repositório público.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+data:
+  SPRING_PROFILES_ACTIVE: "prod"
+  SERVER_PORT: "8080"
+  LOGGING_LEVEL_ROOT: "WARN"
+  LOGGING_LEVEL_APP: "INFO"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-redis-config
+data:
+  SPRING_PROFILES_ACTIVE: "prod"
+  SERVER_PORT: "8081"
+  LOGGING_LEVEL_ROOT: "WARN"
+  LOGGING_LEVEL_APP: "INFO"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chatbot-config
+data:
+  ENVIRONMENT: "prod"
+  PORT: "8000"
+  LOG_LEVEL: "INFO"

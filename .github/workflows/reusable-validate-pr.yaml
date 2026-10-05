@@ -17,10 +17,15 @@ jobs:
         env:
           HEAD_REF: ${{ github.head_ref }}
         run: |
-          PATTERN='^(feat|fix|refactor|chore|test|docs)/[a-zA-Z]{4}-[0-9]{1,4}$'
+          # develop é a branch de integração e não segue o padrão de feature
+          if [[ "$HEAD_REF" == "develop" ]]; then
+            echo "Branch de integração: $HEAD_REF"
+            exit 0
+          fi
+          PATTERN='^(feat|fix|refactor|chore|test|docs)/SCRUM-[0-9]{1,4}$'
           if [[ ! "$HEAD_REF" =~ $PATTERN ]]; then
             echo "::error::Nome de branch inválido: '$HEAD_REF'."
-            echo "::error::Padrão esperado: (feat|fix|refactor|chore|test|docs)/NN-descricao"
+            echo "::error::Padrão esperado: (feat|fix|refactor|chore|test|docs)/SCRUM-<1-4 números>"
             exit 1
           fi
           echo "Nome de branch OK: $HEAD_REF"
@@ -63,4 +68,8 @@ jobs:
             echo "::error::Esperado, por exemplo: 'feat: adiciona endpoint de login'"
             exit 1
           fi
+<<<<<<< HEAD
           echo "Título do PR OK: $PR_TITLE"
+=======
+          echo "Título do PR OK: $PR_TITLE"
+>>>>>>> 6a13929fb089792bfc872d07faf85cb0c8089103
