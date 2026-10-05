@@ -68,8 +68,4 @@ jobs:
             echo "::error::Esperado, por exemplo: 'feat: adiciona endpoint de login'"
             exit 1
           fi
-<<<<<<< HEAD
           echo "Título do PR OK: $PR_TITLE"
-=======
-          echo "Título do PR OK: $PR_TITLE"
->>>>>>> 6a13929fb089792bfc872d07faf85cb0c8089103
