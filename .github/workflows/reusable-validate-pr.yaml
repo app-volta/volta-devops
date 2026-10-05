@@ -17,6 +17,11 @@ jobs:
         env:
           HEAD_REF: ${{ github.head_ref }}
         run: |
+          # develop é a branch de integração e não segue o padrão de feature
+          if [[ "$HEAD_REF" == "develop" ]]; then
+            echo "Branch de integração: $HEAD_REF"
+            exit 0
+          fi
           PATTERN='^(feat|fix|refactor|chore|test|docs)/SCRUM-[0-9]{1,4}$'
           if [[ ! "$HEAD_REF" =~ $PATTERN ]]; then
             echo "::error::Nome de branch inválido: '$HEAD_REF'."
