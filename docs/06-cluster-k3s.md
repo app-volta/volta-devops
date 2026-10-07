@@ -152,6 +152,8 @@ em `https://chat.qa.<EIP>.sslip.io`.
 
 Para validar o chatbot pelo Ingress, use **Actions → Deploy → Run workflow**, selecione `chatbot`, `qa`, a tag QA e marque `qa-smoke`. O workflow escala uma réplica, aguarda readiness, valida `GET /health` com TLS e sempre tenta restaurar `replicas=0`, mesmo se o smoke falhar. Essa opção não executa sessão ou chat autenticados no app mobile; esses passos ainda exigem validação pelo cliente.
 
+O Deployment usa `/health/ready` na readiness probe, que retorna 503 quando PostgreSQL ou MongoDB estiver indisponível, e `/health/live` na liveness probe, que verifica somente o processo. Assim uma falha temporária de banco tira o pod do tráfego sem reiniciá-lo em loop.
+
 Para reimplantar uma versão antiga sem rebuild: **Actions → "Deploy" → Run
 workflow**, informando serviço, ambiente e a tag (`prod-a1b2c3d`).
 
