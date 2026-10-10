@@ -1,60 +1,72 @@
 # volta-devops
 
-Repositório central de infraestrutura, CI/CD e manifestos do projeto **Volta** —
-solução para descarte de resíduos em empresas.
+Repositório de infraestrutura e automação do projeto **Volta**, uma solução para
+descarte de resíduos em empresas.
 
-## O que mora aqui
+Aqui ficam o que faz o projeto **funcionar fora do código das aplicações**: as
+pipelines de build e deploy (GitHub Actions), os manifestos do Kubernetes, os
+scripts do servidor e a documentação.
 
-| Diretório | Conteúdo |
+## O que tem aqui
+
+| Pasta | Conteúdo |
 |---|---|
-| `.github/workflows/` | Reusable workflows consumidos pelos repositórios de aplicação |
-| `docker-compose/` | Compose local; o chatbot usa `ENVIRONMENT: qa` |
-| `kubernetes/` | Manifestos Kustomize (`base/` + `overlays/qa` e `overlays/prod`) |
-| `scripts/` | Provisionamento do cluster, aplicação de manifestos e rollback |
-| `docs/` | Documentação de arquitetura e decisões |
+| `.github/workflows/` | pipelines de CI/CD, usadas pelos repositórios das aplicações |
+| `docker-compose/` | Ambiente local com Docker ([como usar](docker-compose/README.md)) |
+| `kubernetes/` | Arquivos do cluster: `base/` + `overlays/qa` e `overlays/prod` |
+| `scripts/` | Provisionamento da Cloud, rollback e renovação de credenciais |
+| `docs/` | Documentação completa |
 
-## Arquitetura em uma tela
+## Como o projeto funciona
 
 ```text
-Código → CI → imagem no GHCR (<env>-<sha>) → repository_dispatch
-                                                    │
-                                     DevOps: kustomize edit set image no runner
-                                                    │
-                                     SSH → kubectl apply -k → k3s (EC2)
+Código → CI → imagem no GHCR (<ambiente>-<sha>) → aviso ao DevOps
+                                                       │
+                                 troca a versão da imagem nos manifestos
+                                                       │
+                                 SSH → kubectl apply → k3s (EC2)
 ```
 
-| Peça | Escolha |
+| Peça | O que usamos |
 |---|---|
-| Orquestrador | k3s single-node em EC2 t3.medium (AWS Academy Learner Lab) |
-| Ambientes | namespaces `volta-qa` (branch `develop`) e `volta-prod` (branch `main`) |
-| Registry | GHCR, imagens públicas |
-| Ingress | Traefik (embutido no k3s) + `sslip.io` |
-| Postgres | Neon, com branching por ambiente |
-| MongoDB | MongoDB Atlas |
-| Objetos | S3 via presigned URL assinada pela API |
+| Servidor | k3s (Kubernetes leve) em uma EC2 t3.medium (AWS Academy Learner Lab) |
+| Ambientes | `volta-qa` (branch `develop`) e `volta-prod` (branch `main`) |
+| Imagens Docker | GHCR, públicas |
+| Entrada de tráfego | Traefik (já vem no k3s) + `sslip.io` |
+| Banco relacional | Postgres no Neon, com uma branch por ambiente |
+| Banco de documentos | MongoDB Atlas |
+| Fotos | S3, com URL assinada pela API |
 | Website | Vercel |
 
-## HTTPS no QA
+## Por onde começar
 
-O overlay de QA está sendo preparado para servir `api`, `ranking` e `chat` em `https://<serviço>.qa.<EIP>.sslip.io`, com TLS terminado no Traefik e certificados Let's Encrypt geridos pelo cert-manager. O deploy instala o cert-manager, aplica o ClusterIssuer e valida o certificado e o health check HTTPS quando o Deployment tem réplicas ativas. `SSH_HOST` precisa estar definido nas variáveis do repositório.
-
-Essa configuração ainda precisa ser publicada e validada no cluster. O chatbot de QA permanece em `replicas=0` por padrão; para validar o app via HTTPS será necessário escalar temporariamente uma réplica, testar sessão e chat autenticados pelo cliente mobile e depois voltar a zero. Passos e diagnóstico: [`docs/06-cluster-k3s.md`](docs/06-cluster-k3s.md).
-
-O workflow manual `Deploy` tem a opção `qa-smoke`, restrita ao chatbot em QA. Ela escala temporariamente uma réplica, aguarda readiness, executa `GET /health` pelo HTTPS e sempre tenta restaurar `replicas=0`. Esse health check não substitui o teste de sessão e chat autenticados no app mobile.
-
-## Workflows reutilizáveis
-
-| Workflow | Função |
+| Quero... | Leia |
 |---|---|
-| `reusable-validate-pr.yaml` | Valida nome da branch, base do PR e título em Conventional Commits |
-| `reusable-docker-build-push.yaml` | Build, push no GHCR e `repository_dispatch` para este repositório |
-| `ghcr-cleanup.yaml` | Limpeza mensal de versões sem tag |
-| `ec2-power.yaml` | Liga, desliga e inspeciona a EC2 do cluster (`workflow_dispatch`) |
+| Entender a arquitetura e as decisões | [`docs/01-arquitetura-cicd.md`](docs/01-arquitetura-cicd.md) |
+| Saber o que muda entre QA e produção | [`docs/02-ambientes.md`](docs/02-ambientes.md) |
+| Saber onde guardar senhas e tokens | [`docs/03-secrets.md`](docs/03-secrets.md) |
+| Fazer deploy, rollback ou investigar um erro | [`docs/04-runbook-deploy.md`](docs/04-runbook-deploy.md) |
+| Criar branch, commit e Pull Request | [`docs/05-padroes-git.md`](docs/05-padroes-git.md) |
+| Criar ou operar o cluster | [`docs/06-cluster-k3s.md`](docs/06-cluster-k3s.md) |
+| Configurar o Website na Vercel | [`docs/07-vercel-website.md`](docs/07-vercel-website.md) |
+| Rodar o backend na minha máquina | [`docker-compose/README.md`](docker-compose/README.md) |
 
-Padrão de branch aceito: `^(feat|fix|refactor|chore|test|docs)/SCRUM-[0-9]{1,4}$`
-(prefixo Jira `SCRUM` em maiúsculas; exemplo: `feat/SCRUM-1858`).
+## Esteiras (workflows)
 
-Uso a partir de um repositório de aplicação:
+| Workflow | O que faz |
+|---|---|
+| `reusable-validate-pr.yaml` | Confere nome da branch, destino do PR e título (Conventional Commits) |
+| `reusable-docker-build-push.yaml` | Gera a imagem, publica no GHCR e avisa este repositório |
+| `reusable-k3s-deploy.yaml` | Aplica a nova versão no cluster e espera ficar saudável |
+| `dispatch-deploy.yaml` | Recebe o aviso de imagem nova (ou um disparo manual) e inicia o deploy |
+| `ec2-power.yaml` | Liga, desliga e mostra o estado da EC2 |
+| `ghcr-cleanup.yaml` | Limpeza mensal de versões antigas e sem tag no GHCR |
+
+Nome de branch aceito: `^(feat|fix|refactor|chore|test|docs)/SCRUM-[0-9]{1,4}$`
+(exemplo: `feat/SCRUM-1858`). Detalhes em
+[`docs/05-padroes-git.md`](docs/05-padroes-git.md).
+
+### Usar a pipeline em outro repositório
 
 ```yaml
 jobs:
@@ -67,38 +79,57 @@ jobs:
       devops-dispatch-token: ${{ secrets.DEVOPS_DISPATCH_TOKEN }}
 ```
 
-## Operar o cluster
+O token `DEVOPS_DISPATCH_TOKEN` é explicado em
+[`docs/03-secrets.md`](docs/03-secrets.md).
 
-A máquina é criada **uma única vez**, rodando o script abaixo localmente (fica
-versionado aqui para documentar exatamente como o cluster foi provisionado):
+## Uso no dia a dia
 
-```bash
-./scripts/provision-ec2-k3s.sh    # cria o cluster do zero (idempotente)
-```
+### Ligar, desligar e ver o estado do cluster
 
-Ligar, desligar e verificar o estado, no dia a dia, é só pela interface do
-GitHub, no workflow **"Ligar e desligar o cluster"**
-(`Actions` → escolher `start`, `stop` ou `status` → *Run workflow*).
+Pelo GitHub, sem precisar de terminal:
 
-A instância para sozinha após ~15 min sem tráfego de rede. Passo a passo
-completo e diagnóstico em [`docs/06-cluster-k3s.md`](docs/06-cluster-k3s.md).
+**Actions → "Ligar e desligar o cluster" → Run workflow → `start`, `stop` ou `status`**
 
-### Renovar a credencial da sessão do Learner Lab
+A máquina desliga sozinha depois de ~15 minutos sem tráfego de rede.
 
-A cada ~4h a sessão expira. Em vez de editar `~/.aws/credentials` e os
-GitHub Secrets na mão, cole o bloco de "AWS Details" → "AWS CLI" neste script:
+### Criar o cluster (só uma vez)
 
 ```bash
-./scripts/update-aws-session.sh          # grava ~/.aws/credentials
-./scripts/update-aws-session.sh --gh     # também atualiza os secrets usados pelo ec2-power.yaml
+./scripts/provision-ec2-k3s.sh
 ```
 
-## Documentação
+O script pode ser rodado de novo sem problemas: ele reaproveita o que já existe.
+Passo a passo em [`docs/06-cluster-k3s.md`](docs/06-cluster-k3s.md).
 
-- [`docs/01-arquitetura-cicd.md`](docs/01-arquitetura-cicd.md) — arquitetura de
-  CI/CD completa: branches, rulesets, ambientes, GHCR, deploy, secrets e as
-  comparações que sustentam cada decisão.
-- [`docs/06-cluster-k3s.md`](docs/06-cluster-k3s.md) — runbook do cluster:
-  provisionamento, operação, custo e diagnóstico.
-- [`docs/07-vercel-website.md`](docs/07-vercel-website.md) — como o projeto
-  Vercel do Website é configurado (branches, env vars).
+### Renovar a sessão do Learner Lab
+
+A sessão da AWS Academy expira a cada ~4 horas. Cole o bloco de
+**AWS Details → AWS CLI** neste script:
+
+```bash
+./scripts/update-aws-session.sh          # atualiza ~/.aws/credentials
+./scripts/update-aws-session.sh --gh     # também atualiza os secrets do GitHub
+```
+
+### Voltar uma versão
+
+```bash
+./scripts/rollback.sh prod api                 # volta uma revisão
+./scripts/rollback.sh prod api prod-a1b2c3d    # volta para uma tag específica
+```
+
+Outras opções em [`docs/04-runbook-deploy.md`](docs/04-runbook-deploy.md).
+
+## HTTPS no QA
+
+O QA está sendo preparado para responder em
+`https://<serviço>.qa.<EIP>.sslip.io`. O certificado é do Let's Encrypt, emitido
+pelo cert-manager, e o deploy instala e valida tudo sozinho. É preciso que a
+variável `SSH_HOST` esteja definida no repositório.
+
+Essa configuração **ainda precisa ser publicada e validada no cluster**. O
+chatbot de QA fica com `replicas=0` por padrão. Para validar com o HTTPS, use a
+opção `qa-smoke` do workflow **Deploy**: ela liga uma réplica, testa
+`GET /health` e volta para zero. Esse teste não substitui a validação de sessão
+e chat pelo app mobile. Detalhes em
+[`docs/04-runbook-deploy.md`](docs/04-runbook-deploy.md#testar-o-chatbot-em-qa-qa-smoke).

@@ -1,26 +1,55 @@
-# Arquitetura de CI/CD — Projeto Volta
+# Arquitetura de CI/CD: Projeto Volta
 
-> Repositório: `app-volta/DevOps` · Caminho: `docs/01-arquitetura-cicd.md`
-> Versão 4 — revisada após a migração do Render para Kubernetes (k3s em EC2 do AWS Academy Learner Lab).
+> Repositório: `app-volta/volta-devops` · Caminho: `docs/01-arquitetura-cicd.md`
+> Versão 5: texto simplificado. Reflete a migração do Render para Kubernetes (k3s
+> em uma EC2 do AWS Academy Learner Lab).
+
+Este documento explica **como o projeto é construído e publicado, e por que cada
+escolha foi feita**. Para o passo a passo do dia a dia, veja:
+
+| Preciso de... | Documento |
+|---|---|
+| Diferenças entre QA e produção | [`02-ambientes.md`](02-ambientes.md) |
+| Onde guardar senhas e tokens | [`03-secrets.md`](03-secrets.md) |
+| Fazer deploy ou rollback | [`04-runbook-deploy.md`](04-runbook-deploy.md) |
+| Regras de branch, commit e PR | [`05-padroes-git.md`](05-padroes-git.md) |
+| Operar o cluster | [`06-cluster-k3s.md`](06-cluster-k3s.md) |
+| Configurar o Website | [`07-vercel-website.md`](07-vercel-website.md) |
 
 ---
 
-## Decisões fechadas
+## Glossário rápido
+
+| Termo | Significa |
+|---|---|
+| **CI** | Integração contínua: testar o código automaticamente a cada mudança |
+| **CD** | Entrega contínua: publicar automaticamente o que passou nos testes |
+| **GHCR** | Registro de imagens Docker do GitHub |
+| **Imagem** | Pacote com a aplicação pronta para rodar |
+| **k3s** | Versão leve do Kubernetes |
+| **Namespace** | "Pasta" dentro do Kubernetes. Usamos uma por ambiente |
+| **Kustomize** | Ferramenta que monta os manifestos do Kubernetes a partir de uma base e de ajustes por ambiente |
+| **Reusable workflow** | Esteira do GitHub Actions que outros repositórios podem chamar |
+| **Ruleset** | Regras de proteção das branches (exigir aprovação, exigir testes) |
+| **Smoke test** | Teste rápido para ver se o serviço respondeu depois do deploy |
+| **Rollback** | Voltar para uma versão anterior |
+
+---
+
+## Decisões principais
 
 | Decisão | Consequência |
 |---|---|
-| **Todos os repositórios públicos** | Proteção de branch, rulesets, Environments e CODEOWNERS disponíveis; minutos de Actions ilimitados |
-| **Ruleset no nível da organização**, mínimo 1 aprovação | Uma configuração vale para todos os repositórios, com exclusão do `volta-landing-page` |
-| **Imagens no GHCR públicas** | Storage gratuito; cluster e Compose sem credencial de registry |
-| **API e Chatbot em k3s** (EC2 t3.medium), **Website na Vercel** | Kubernetes é requisito da disciplina; o front não consome crédito AWS |
-| **Postgres no Neon**, MongoDB no Atlas | Bancos gerenciados fora do cluster, com branching por ambiente |
-| **Deploy por SSH + `kubectl apply -k`** | O Learner Lab não permite criar roles IAM, o que inviabiliza OIDC |
+| **Todos os repositórios são públicos** | Proteção de branch, Environments e CODEOWNERS ficam disponíveis. Minutos de Actions são ilimitados |
+| **Regras de proteção na organização**, com mínimo de 1 aprovação | Uma configuração vale para todos os repositórios (exceto o `volta-landing-page`) |
+| **Imagens do GHCR públicas** | Armazenamento gratuito. O cluster e o Compose baixam sem login |
+| **API e Chatbot no k3s** (EC2 t3.medium); **Website na Vercel** | Kubernetes é exigido pela disciplina. O front não gasta crédito AWS |
+| **Postgres no Neon**, **MongoDB no Atlas** | Bancos gerenciados fora do cluster, com isolamento por ambiente |
+| **Deploy por SSH + `kubectl apply -k`** | O Learner Lab não permite criar roles IAM, então OIDC não é possível |
 
-Requisito acadêmico registrado: o professor de DevOps avalia o uso de **code
-review e Pull Request** com proteção da `main`, e exige **Kubernetes** como
-orquestrador em nuvem. Isso eleva a proteção de branch
-de "boa prática" a **entregável avaliado** — ela é parte do trabalho, não
-enfeite da esteira.
+Contexto acadêmico: o professor de DevOps avalia o uso de **code review e Pull
+Request** com a `main` protegida, e exige **Kubernetes** na nuvem. Por isso a
+proteção de branch é um entregável do trabalho, não um enfeite.
 
 ---
 
@@ -31,66 +60,68 @@ enfeite da esteira.
 3. [Responsabilidade de cada repositório](#3-responsabilidade-de-cada-repositório)
 4. [Estratégia de branches](#4-estratégia-de-branches)
 5. [Fluxo de Pull Requests](#5-fluxo-de-pull-requests)
-6. [Proteção de branches e ruleset](#6-proteção-de-branches-e-ruleset)
+6. [Proteção de branches](#6-proteção-de-branches)
 7. [CODEOWNERS](#7-codeowners)
 8. [Ambientes QA e PROD](#8-ambientes-qa-e-prod)
 9. [Estratégia de GitHub Actions](#9-estratégia-de-github-actions)
 10. [Workflows por repositório](#10-workflows-por-repositório)
-11. [Workflows reutilizáveis no DevOps](#11-workflows-reutilizáveis-no-devops)
-12. [Pipelines de build, testes e qualidade](#12-pipelines-de-build-testes-e-qualidade)
+11. [Workflows reutilizáveis](#11-workflows-reutilizáveis)
+12. [Build, testes e qualidade](#12-build-testes-e-qualidade)
 13. [Segurança e secrets](#13-segurança-e-secrets)
-14. [Estratégia de Docker](#14-estratégia-de-docker)
-15. [Estratégia de Docker Compose](#15-estratégia-de-docker-compose)
-16. [Estratégia de GHCR](#16-estratégia-de-ghcr)
+14. [Docker](#14-docker)
+15. [Docker Compose](#15-docker-compose)
+16. [GHCR](#16-ghcr)
 17. [Deploy: Kubernetes e Vercel](#17-deploy-kubernetes-e-vercel)
-18. [Estrutura de diretórios do DevOps](#18-estrutura-de-diretórios-do-devops)
-19. [Fluxo completo em diagrama](#19-fluxo-completo-em-diagrama)
+18. [Estrutura do repositório](#18-estrutura-do-repositório)
+19. [Fluxo completo](#19-fluxo-completo)
 20. [Regras de merge](#20-regras-de-merge)
-21. [Estratégia de QA](#21-estratégia-de-qa)
-22. [Estratégia de produção](#22-estratégia-de-produção)
-23. [Comparação das alternativas arquiteturais](#23-comparação-das-alternativas-arquiteturais)
-24. [Histórico da migração Render → Kubernetes](#24-histórico-da-migração-render--kubernetes)
+21. [QA](#21-qa)
+22. [Produção](#22-produção)
+23. [Alternativas que comparamos](#23-alternativas-que-comparamos)
+24. [Histórico: Render → Kubernetes](#24-histórico-render--kubernetes)
 25. [Recomendações finais](#25-recomendações-finais)
 
 ---
 
 ## 1. Arquitetura geral
 
+O projeto tem três "camadas":
+
 ```text
 ┌──────────────────────────────────────────────────────────────────────┐
-│ PLANO 1 — CÓDIGO (um repositório por aplicação, todos públicos)      │
-│  API · Mobile · Chatbot · Database · Website                         │
-│  Cada repo é dono do seu código, dos seus testes e do seu CI         │
+│ 1. CÓDIGO: um repositório por aplicação (todos públicos)             │
+│    API · Mobile · Chatbot · Database · Website                       │
+│    Cada um cuida do seu código, dos seus testes e do seu CI          │
 └──────────────────────────────────────────────────────────────────────┘
-                                │  workflow_call
+                                │  chama
                                 ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│ PLANO 2 — INFRAESTRUTURA COMPARTILHADA (repositório DevOps)          │
-│  Reusable workflows · Compose · Scripts · Manifestos k8s · Docs      │
+│ 2. INFRAESTRUTURA COMPARTILHADA: este repositório (volta-devops)     │
+│    Workflows reutilizáveis · Compose · Scripts · Manifestos · Docs   │
 └──────────────────────────────────────────────────────────────────────┘
                                 │  publica / aciona
                                 ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│ PLANO 3 — EXECUÇÃO                                                   │
-│  GHCR (imagens públicas) · k3s/EC2 (API, Chatbot) · Vercel (Website) │
-│  Neon (PostgreSQL) · MongoDB Atlas                                   │
+│ 3. EXECUÇÃO                                                          │
+│    GHCR (imagens) · k3s na EC2 (API, Chatbot) · Vercel (Website)     │
+│    Neon (PostgreSQL) · MongoDB Atlas                                 │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-Fluxo do artefato:
+O caminho da imagem:
 
 ```text
-Código → CI (build + teste) → Imagem Docker → GHCR → repository_dispatch
-                                                        │
-                                              DevOps: kustomize edit set image
-                                                        │
-                                              SSH → kubectl apply -k → k3s
+Código → CI (build + teste) → imagem Docker → GHCR → repository_dispatch
+                                                          │
+                                       DevOps: kustomize edit set image
+                                                          │
+                                       SSH → kubectl apply -k → k3s
 
 Website: Código → CI → Vercel (preview em develop, produção em main)
 ```
 
-O princípio que governa tudo é **build once, deploy many**: a imagem que passou
-nos testes é exatamente a mesma que sobe em QA e em PROD. Nada é reconstruído
+A ideia central é **"construir uma vez, implantar várias"**. A imagem que passou
+nos testes é exatamente a mesma que sobe em QA e em produção. Nada é recompilado
 no destino.
 
 ---
@@ -99,311 +130,245 @@ no destino.
 
 ### 2.1 Repositórios públicos
 
-A abertura dos repositórios destrava quatro recursos que o plano Free restringe
-a repositórios públicos:
+Deixar os repositórios públicos libera recursos que o plano gratuito do GitHub
+só oferece nesse caso:
 
-| Recurso | Efeito na arquitetura |
+| Recurso | Para quê |
 |---|---|
-| Rulesets e proteção de branch | Merge bloqueado com CI falhando — requisito avaliado da disciplina |
+| Rulesets e proteção de branch | Bloquear merge com CI falhando (exigência da disciplina) |
 | Environments | Secrets por ambiente e **aprovação manual antes de produção** |
-| CODEOWNERS | Atribuição automática de revisor por área |
-| Minutos de Actions ilimitados | Sem orçamento de minutos a administrar |
+| CODEOWNERS | Indicar automaticamente quem revisa cada área |
+| Minutos de Actions ilimitados | Sem preocupação com cota |
 
-Contrapartida: **nenhuma credencial pode ir para o Git**, e um secret commitado
-e removido depois continua no histórico. Ligue **secret scanning e push
-protection** em todos os repositórios — é gratuito em repositório público e
-bloqueia o push antes de o token entrar no histórico.
+**O custo:** nenhuma credencial pode ir para o Git. Apagar um segredo depois do
+commit não resolve, pois ele continua no histórico. Ligue o **secret scanning**
+e o **push protection** em todos os repositórios (é gratuito em repositório
+público): eles bloqueiam o push antes de o segredo entrar no histórico.
 
-### 2.2 Reusable workflows moram em `.github/workflows/` do DevOps
+### 2.2 Workflows reutilizáveis ficam em `.github/workflows/`
 
-Correção à estrutura originalmente proposta: um reusable workflow **precisa**
-estar em `.github/workflows/` do repositório que o hospeda. Uma pasta
-`workflows/` na raiz não é reconhecida pelo `workflow_call`.
-
-Com o DevOps público, qualquer repositório da organização consegue chamá-lo sem
-configuração adicional de acesso.
+Um workflow reutilizável **precisa** estar em `.github/workflows/` do
+repositório que o oferece. Uma pasta `workflows/` na raiz não funciona. Como este
+repositório é público, qualquer repositório da organização pode chamá-lo.
 
 ### 2.3 Website na Vercel, sem Docker em produção
 
-O Website é um bundle estático. Conteinerizá-lo significaria disputar memória
-com a API e o Chatbot no nó único e manter um `nginx.conf` — sem ganho.
-A Vercel entrega deploy automático, CDN e **preview por Pull Request**, que é
-genuinamente útil para revisar mudança de front-end.
+O Website é um conjunto de arquivos estáticos. Colocá-lo em container gastaria
+memória do servidor (que já é pequeno) e exigiria manter um `nginx.conf`, sem
+ganho. A Vercel já entrega deploy automático, CDN e **preview por Pull Request**.
 
-O Dockerfile continua existindo no repositório para o Compose local e para
-demonstrar conteinerização, mas não é o caminho de produção.
+O Dockerfile continua no repositório do Website, mas só para o Compose local.
 
 ### 2.4 O banco não fica no cluster
 
-Rodar Postgres dentro do k3s significaria disputar os 4 GB da t3.medium com as
-aplicações e assumir a responsabilidade por volume, backup e restore — trabalho
-de operação que não agrega nada ao que a disciplina avalia.
+Rodar o Postgres dentro do k3s disputaria os 4 GB de memória da t3.medium com as
+aplicações e daria trabalho extra de backup e restauração. Não agrega nada ao
+que a disciplina avalia.
 
-**Escolha do grupo: Neon.** O plano gratuito não tem prazo de validade e
-permite múltiplos projetos, cada um com **branching de banco** — um recurso que
-resolve de saída o problema que outras opções gratuitas têm de sustentar dois
-ambientes ao mesmo tempo.
+**Escolha: Neon.** O plano gratuito não expira e permite **branches de banco**.
+Usamos um projeto com duas branches, `qa` e `prod`. Cada uma funciona como um
+banco independente, mas nasce do mesmo ponto de partida. Isso facilita recriar o
+QA a partir da produção para reproduzir um bug.
 
-Modelo adotado: **um projeto Neon**, com duas branches de banco —
-`qa` e `prod`. Cada branch se comporta como um banco independente (schema e
-dados próprios), mas nasce de um snapshot compartilhado, o que facilita
-recriar QA a partir de PROD quando for útil para reproduzir um bug. Isso
-resolve, sem precisar de duas contas nem de dois bancos lógicos manuais, o
-mesmo isolamento que eu tinha desenhado como pendência quando o banco era o
-Aiven.
+Ponto de atenção: o Neon gratuito **hiberna** depois de alguns minutos sem uso.
+O primeiro acesso depois disso é mais lento (segundos, não minutos). Acorde-o
+antes de uma demonstração, assim como a EC2.
 
-**Redis** (ranking de cooperativas) e **Neo4j** seguem com hospedagem a
-definir — a decisão é a mesma em espírito: serviço gerenciado fora do nó.
+**MongoDB (Chatbot):** Atlas M0 (gratuito, 512 MB), com dois bancos lógicos,
+`volta_qa` e `volta_prod`.
 
-Único ponto de atenção: como o Neon do plano gratuito também aplica
-**scale-to-zero** — a instância de computação hiberna depois de alguns minutos
-sem uso —, o primeiro acesso após um período parado tem uma latência maior
-(volta em segundos, não minutos, mas é perceptível). Vale religar antes de uma
-demonstração, pelo mesmo motivo da EC2.
-
-Para o Chatbot, **MongoDB Atlas M0**
-(gratuito, 512 MB), com dois bancos lógicos — `volta_qa` e `volta_prod`.
+**Redis e Neo4j:** hospedagem ainda a definir. A ideia é a mesma: serviço
+gerenciado fora do servidor.
 
 ### 2.5 Imagens do GHCR públicas
 
-Storage gratuito, k3s puxando imagem sem `imagePullSecret` e Compose
-funcionando sem login. O preço é que **tudo dentro da imagem é público** — o que transforma
-várias recomendações da seção 13 em requisitos.
+O armazenamento é gratuito e o k3s baixa as imagens sem `imagePullSecret`. O
+preço é que **tudo dentro da imagem é público**. Isso transforma várias
+recomendações da seção 13 em obrigações.
 
 ---
 
 ## 3. Responsabilidade de cada repositório
 
-| Repositório | Produz | CI | CD |
+| Repositório | Produz | CI | Deploy |
 |---|---|---|---|
-| **API** | `ghcr.io/app-volta/api` | Maven build + testes | k3s QA (auto) / PROD (com aprovação) |
-| **API Redis** | `ghcr.io/app-volta/api-redis` | Maven build + testes | k3s QA (auto) / PROD (com aprovação) |
-| **Mobile** | APK como artifact | Gradle build + testes + lint | — |
-| **Chatbot** | `ghcr.io/app-volta/chatbot` | Ruff + pytest | k3s QA (auto) / PROD (com aprovação) |
-| **Website** | Bundle estático | Lint + tsc + build | Vercel: preview (develop) / produção (main) |
-| **Database** | Scripts SQL + `.drawdb` | Execução em Postgres efêmero | — |
-| **DevOps** | Reusable workflows, manifestos k8s, Compose, docs | Lint de YAML | Aplica os manifestos via SSH |
-| **volta-landing-page** | Página do 1º ano | — | Fora do ruleset e desta arquitetura |
+| **API** | `ghcr.io/app-volta/api` | Build e testes com Maven | k3s: QA automático, PROD com aprovação |
+| **API Redis** | `ghcr.io/app-volta/api-redis` | Build e testes com Maven | k3s: QA automático, PROD com aprovação |
+| **Mobile** | APK como artifact | Build, testes e lint com Gradle | Nenhum |
+| **Chatbot** | `ghcr.io/app-volta/chatbot` | Ruff + pytest | k3s: QA automático, PROD com aprovação |
+| **Website** | Arquivos estáticos | Lint, `tsc` e build | Vercel: preview (develop) e produção (main) |
+| **Database** | Scripts SQL e `.drawdb` | Roda os scripts em um Postgres temporário | Nenhum |
+| **DevOps** (este) | Workflows reutilizáveis, manifestos, Compose, docs | Validação dos YAML | Aplica os manifestos por SSH |
+| **volta-landing-page** | Página do 1º ano | Nenhum | Fora desta arquitetura |
 
-Detalhamentos que importam:
+Detalhes que importam:
 
-**API.** Expõe `/actuator/health` — não é enfeite: é o alvo da readiness probe
-do Kubernetes e do smoke test pós-deploy. A porta vem de variável de ambiente
-(`SERVER_PORT`), o que mantém o container portátil entre Compose e cluster.
-
-**Mobile.** Publica o APK de debug como artifact do workflow. Os colegas e o
-professor baixam o app pela aba Actions sem precisar compilar. Não é publicação
-em loja — é distribuição interna, e resolve um problema real de demonstração.
-
-**Database.** Sem deploy e sem migrations. Ganha uma verificação que custa quase
-nada: subir um Postgres descartável dentro do runner e executar os scripts na
-ordem. Erro de sintaxe no DDL, FK apontando para tabela inexistente ou insert
-violando constraint fazem o CI falhar antes de a API tentar usar aquele schema.
-
-**Website.** O Vite embute as variáveis `VITE_*` no bundle **em tempo de
-build**. Logo, a URL da API é configurada no painel da Vercel, e **nenhum
-segredo pode ser uma variável `VITE_*`** — ela fica visível no JavaScript
-entregue ao navegador.
-
-**DevOps.** Não hospeda código de aplicação. Regra para decidir se algo pertence
-ao DevOps: *"se este arquivo precisar mudar quando o código da aplicação mudar,
-ele não é do DevOps"*.
-
-**volta-landing-page.** Repositório dos integrantes do 1º ano, que não têm code
-review como requisito e fazem merge direto pelo terminal. Está explicitamente
-excluído do ruleset da organização (seção 6) e não participa desta esteira.
+- **API.** Expõe `/actuator/health`, usado pelas verificações de saúde do
+  Kubernetes e pelo smoke test depois do deploy. A porta vem da variável
+  `SERVER_PORT`, o que mantém o container igual no Compose e no cluster.
+- **Mobile.** Publica o APK de debug como artifact do workflow. Colegas e
+  professor baixam o app pela aba Actions, sem compilar.
+- **Database.** Não tem deploy nem migrations. O CI sobe um Postgres descartável
+  e executa os scripts em ordem. Erro de sintaxe ou referência quebrada faz o CI
+  falhar antes de a API tentar usar o schema.
+- **Website.** O Vite grava as variáveis `VITE_*` no código **na hora do
+  build**. Por isso a URL da API é configurada na Vercel, e **nenhum segredo
+  pode ser `VITE_*`**.
+- **DevOps.** Não tem código de aplicação. Regra prática: se um arquivo precisa
+  mudar quando o código da aplicação muda, ele não é do DevOps.
+- **volta-landing-page.** É do 1º ano, que não tem code review como requisito.
+  Está fora do ruleset da organização.
 
 ---
 
 ## 4. Estratégia de branches
 
 ```text
-main     ──●───────────────●──────────────●──────►  PROD
+main     ──●───────────────●──────────────●──────►  PRODUÇÃO
             ╲             ╱ ╲            ╱
 develop  ────●───●───●───●───●───●───●──●─────────►  QA
               ╲ ╱     ╲ ╱         ╲ ╱
 feat/SCRUM-1858 ●    ●            ●
 ```
 
-### Padrão de nomes validado automaticamente
-
-Branches de trabalho usam um tipo permitido seguido da chave Jira do projeto.
-O prefixo é exatamente `SCRUM`, em maiúsculas, seguido de 1 a 4 dígitos e sem
-descrição adicional. Padrão adotado:
+Nome da branch de trabalho: `<tipo>/SCRUM-<número>`, validado automaticamente.
 
 ```regex
 ^(feat|fix|refactor|chore|test|docs)/SCRUM-[0-9]{1,4}$
 ```
 
-Exemplos válidos: `feat/SCRUM-1858`, `fix/SCRUM-123` e
-`chore/SCRUM-1933`. Prefixos diferentes (como `SCRU`), letras minúsculas ou
-sufixos descritivos são rejeitados pelo job `validate-pr`.
+Válidos: `feat/SCRUM-1858`, `fix/SCRUM-123`. Inválidos: `feat/SCRU-1858`,
+`feat/scrum-1858`, `feat/SCRUM-1858-login`.
 
 ### Hotfix
 
-Sem branches `release/*`, ainda falta responder: *e quando PROD quebra e
-`develop` já tem trabalho não validado?*
+Se a produção quebrar e `develop` tiver trabalho ainda não validado:
 
-```text
-main ──●──────────────●──►
-        ╲            ╱ ╲
-         ● fix/SCRUM-123 ─┘   ╲ (back-merge obrigatório)
-                          ▼
-develop ──────────────────●──►
-```
+1. Crie `fix/SCRUM-123` **a partir de `main`**.
+2. Abra PR para `main`, com os mesmos checks e aprovação.
+3. Depois do merge, **abra um PR de `main` para `develop`**. Sem isso, o próximo
+   `develop → main` traz o bug de volta.
 
-1. Criar `fix/SCRUM-123` **a partir de `main`**.
-2. PR para `main`, com os mesmos checks e aprovação.
-3. Depois do merge, **abrir imediatamente um PR de `main` para `develop`**. Sem
-   esse passo, o próximo merge `develop → main` reintroduz o bug.
-
-É o único caso em que uma branch não sai de `develop`, e precisa estar
-documentado antes de acontecer às 23h da véspera da entrega.
+Mais detalhes em [`05-padroes-git.md`](05-padroes-git.md).
 
 ---
 
 ## 5. Fluxo de Pull Requests
 
 ```text
- Ticket SCRUM-1858 criado e atribuído no Jira
+ Ticket SCRUM-1858 no Jira
         │
         ├─► branch feat/SCRUM-1858 (a partir de develop)
-        │
         ├─► commits (Conventional Commits)
-        │
-        ├─► PR para develop, vinculado ao ticket SCRUM-1858
+        ├─► PR para develop, ligado ao ticket
         │        │
-        │        ├─ [auto] validate-pr  → nome da branch, base, título
-        │        ├─ [auto] build-test   → build, testes, lint
-        │        ├─ [auto] revisor atribuído via CODEOWNERS
-        │        │
-        │        ├─ 1 aprovação obrigatória (ruleset)
+        │        ├─ [auto] validate-pr: nome da branch, destino e título
+        │        ├─ [auto] build-test: build, testes e lint
+        │        ├─ [auto] revisor indicado pelo CODEOWNERS
+        │        ├─ 1 aprovação obrigatória
         │        └─ conversas resolvidas
         │
-        └─► squash merge em develop  →  dispara CD de QA
+        └─► squash merge em develop → dispara o deploy de QA
 ```
 
-Três pontos que fazem diferença:
+Três pontos importantes:
 
-- **A chave Jira no nome da branch e no PR** mantém a rastreabilidade
-  ticket ↔ branch ↔ PR ↔ commit.
-- **PR de feature só pode ter `develop` como base** — verificado pelo
-  `validate-pr`.
-- **Um PR, um ticket Jira.** PRs que resolvem três coisas são impossíveis de
-  revisar e destroem a distribuição de commits entre colaboradores, que é
-  critério de avaliação.
+- **A chave do Jira na branch e no PR** liga ticket, branch, PR e commit.
+- **PR de feature só pode ter `develop` como destino.**
+- **Um PR, um ticket.** PRs que resolvem várias coisas são difíceis de revisar.
 
-Como o code review é requisito avaliado, o template de PR ganha peso. Checklist
-sugerido:
+Checklist sugerido para o template de PR:
 
 ```markdown
 - [ ] O CI passou nesta branch
 - [ ] Testei localmente
-- [ ] A issue vinculada está coberta por completo
+- [ ] A issue vinculada está totalmente coberta
 ```
 
 ---
 
-## 6. Proteção de branches e ruleset
+## 6. Proteção de branches
 
-A proteção é configurada **uma vez, no nível da organização**, e vale para todos
-os repositórios — em vez de repetir a configuração seis vezes e esquecer uma.
+A proteção é configurada **uma vez, na organização**, e vale para todos os
+repositórios.
 
-### Pré-requisito: nomes de check padronizados
+### Pré-requisito: nomes de check iguais
 
-Um ruleset de organização exige o **mesmo nome de check** em todos os
-repositórios alvo. Por isso todo workflow usa os mesmos nomes de job:
+Para um ruleset de organização funcionar, todos os repositórios precisam usar
+os **mesmos nomes de job**:
 
 ```text
 build-test
 validate-pr
 ```
 
-Ao chamar um reusable workflow, o nome que aparece na lista de checks é
-`job-chamador / job-chamado` — por exemplo, `validate-pr / validate-pr`. Rode o
-workflow uma vez, copie o nome exato da interface e só então marque como
-obrigatório.
+Ao chamar um workflow reutilizável, o nome que aparece é `job-chamador /
+job-chamado`, por exemplo `validate-pr / validate-pr`. Rode o workflow uma vez,
+copie o nome exato da interface e só então marque como obrigatório.
 
-### Ruleset `develop`
+### Regras para `develop`
 
 | Regra | Valor |
 |---|---|
 | Pull Request obrigatório | Sim |
 | Aprovações necessárias | 1 |
-| Descartar aprovações em novo push | Não |
+| Descartar aprovações após novo push | Não |
 | Checks obrigatórios | `validate-pr / validate-pr`, `build-test` |
-| Exigir branch atualizada antes do merge | Não |
-| Resolução de conversas | Sim |
-| Bloquear force push | Sim |
-| Bloquear exclusão | Sim |
+| Exigir branch atualizada | Não |
+| Resolver conversas | Sim |
+| Bloquear force push e exclusão | Sim |
 
-### Ruleset `main`
+### Regras para `main`
 
 | Regra | Valor |
 |---|---|
 | Pull Request obrigatório | Sim |
 | Aprovações necessárias | 1 |
-| Descartar aprovações em novo push | **Sim** |
+| Descartar aprovações após novo push | **Sim** |
 | Exigir revisão de CODEOWNERS | **Sim** |
 | Checks obrigatórios | `validate-pr / validate-pr`, `build-test` |
-| Exigir branch atualizada antes do merge | **Sim** |
-| Resolução de conversas | Sim |
-| Bloquear force push | Sim |
-| Bloquear exclusão | Sim |
+| Exigir branch atualizada | **Sim** |
+| Resolver conversas | Sim |
+| Bloquear force push e exclusão | Sim |
 
-### Por que 1 aprovação e não 2
+### Por que 1 aprovação, e não 2?
 
-A equipe tem, em vários repositórios, uma ou duas pessoas com contexto real. O
-GitHub já impede que o autor aprove o próprio PR. Exigir 2 aprovações num
-repositório com 2 pessoas significa que **nenhum PR consegue ser mergeado** — e
-a saída inevitável é alguém desligar a regra às pressas, o que é pior do que
-nunca tê-la ligado. Uma aprovação obrigatória é uma regra que a equipe consegue
-cumprir.
+Em vários repositórios só uma ou duas pessoas conhecem o código. O GitHub não
+deixa o autor aprovar o próprio PR. Exigir 2 aprovações com 2 pessoas
+**trava todos os PRs**, e a saída seria desligar a regra na pressa, o que é pior
+do que nunca ter ligado. Uma aprovação é uma regra que a equipe consegue cumprir.
 
-Em `main`, o rigor extra vem de outro lugar: revisão obrigatória do CODEOWNER,
-descarte de aprovações em novo push e aprovação manual do Environment de
-produção.
+Em `main`, o rigor extra vem de outros pontos: aprovação do CODEOWNER, descarte
+de aprovações antigas e aprovação manual do Environment `prod`.
 
-### Excluir o `volta-landing-page` do ruleset
+### Excluir o `volta-landing-page`
 
-Os integrantes do 1º ano não têm code review como requisito e fazem merge direto
-pelo terminal. Como o ruleset é de organização, ele precisa ser excluído
-explicitamente.
-
-Em **Organization settings → Repository → Rulesets → (seu ruleset) → Targeting
-criteria**:
+O 1º ano faz merge direto pelo terminal. Em **Organization settings →
+Repository → Rulesets → (seu ruleset) → Targeting criteria**:
 
 ```text
 Add a target → Include by pattern → *
-Add a target → Exclude by pattern → volta-landing-page
+Add a target → Exclude by pattern → volta-landing-*
 ```
 
-Alternativas, se o cenário crescer:
+O padrão `volta-landing-*` cobre o repositório atual e os futuros do 1º ano.
 
-| Forma | Como | Quando |
-|---|---|---|
-| **Exclude by pattern** | `*` incluído, `volta-landing-page` excluído | Recomendado agora |
-| Padrão coringa | Excluir `volta-landing-*` | Se o 1º ano criar mais repositórios |
-| Only selected repositories | Marcar manualmente os 6 do 2º ano | Lista explícita, exige editar a cada repo novo |
-| Custom property | Propriedade `code-review` e filtro por ela | Se a organização crescer bastante |
+### Cuidado: filtros `paths` em check obrigatório
 
-Recomendação: use `volta-landing-*` como padrão de exclusão desde já. Cobre o
-repositório atual e os futuros do 1º ano sem exigir nova intervenção.
-
-### Uma armadilha a evitar
-
-**Filtros `paths` em check obrigatório.** Se um workflow obrigatório é pulado
-por `paths-ignore`, o GitHub mostra o check como "pendente" para sempre e o PR
-**nunca** pode ser mergeado. Não use filtro de caminho em workflow que é check
-obrigatório.
+Se um workflow obrigatório for pulado por `paths-ignore`, o GitHub mostra o check
+como "pendente" para sempre e o PR **nunca** pode ser mergeado. Não use filtro de
+caminho em workflow que é check obrigatório.
 
 ---
 
 ## 7. CODEOWNERS
 
-Com os repositórios públicos, o CODEOWNERS funciona: ele atribui revisor
-automaticamente e, combinado com "Exigir revisão de CODEOWNERS" no ruleset de
-`main`, torna a aprovação da pessoa certa obrigatória.
+> **Estado atual:** este repositório ainda não tem o arquivo `.github/CODEOWNERS`.
+> A seção descreve o que está planejado.
+
+O CODEOWNERS indica automaticamente quem revisa cada parte do código. Junto com
+"Exigir revisão de CODEOWNERS" em `main`, a aprovação da pessoa certa passa a ser
+obrigatória.
 
 Times sugeridos na organização:
 
@@ -412,175 +377,155 @@ Times sugeridos na organização:
 @app-volta/data       @app-volta/ai        @app-volta/devops
 ```
 
-Arquivo `.github/CODEOWNERS` em cada repositório. Exemplo para a **API**:
+Exemplo para a **API**:
 
 ```text
 # Dono padrão de todo o repositório
 *                       @app-volta/backend
 
-# Infraestrutura e pipeline são responsabilidade do time de DevOps
+# Pipeline e Docker são do time de DevOps
 /.github/workflows/     @app-volta/devops
 /Dockerfile             @app-volta/devops
 /.dockerignore          @app-volta/devops
 
-# Contrato do banco: entidades JPA envolvem a Modelagem de Dados
+# Entidades JPA envolvem a modelagem de dados
 /src/main/java/**/entity/    @app-volta/backend @app-volta/data
 ```
 
-A linha de `/.github/workflows/` é a mais relevante para o papel de DevOps:
-registra que qualquer alteração na pipeline, em qualquer repositório, passa
-pelo time responsável por ela.
+Três cuidados:
 
-Três detalhes práticos:
-
-1. CODEOWNERS só funciona se o time tiver **permissão de escrita** no
-   repositório.
-2. O time DevOps precisa de **pelo menos duas pessoas** — com uma só, você fica
-   bloqueado ao alterar um workflow, porque ninguém pode aprovar o próprio PR.
-3. Regras posteriores sobrescrevem as anteriores: a linha `*` fica sempre no
-   topo.
+1. O time precisa ter **permissão de escrita** no repositório.
+2. O time de DevOps precisa ter **pelo menos duas pessoas**. Com uma só, ninguém
+   consegue aprovar o PR de quem altera um workflow.
+3. Regras posteriores vencem as anteriores. Deixe a linha `*` no topo.
 
 ---
 
 ## 8. Ambientes QA e PROD
 
 ```text
-develop  ──►  Environment "qa"    ──►  namespace volta-qa    ──►  Neon branch qa / volta_qa
-                                       Vercel: preview da branch develop
+develop ──► Environment "qa"   ──► namespace volta-qa   ──► Neon branch qa / Atlas volta_qa
+                                   Vercel: preview
 
-main     ──►  Environment "prod"  ──►  namespace volta-prod  ──►  Neon branch prod / volta_prod
-                                       Vercel: produção
+main    ──► Environment "prod" ──► namespace volta-prod ──► Neon branch prod / Atlas volta_prod
+                                   Vercel: produção
 
 Um único cluster k3s, dois namespaces. O isolamento é lógico: Secrets,
-ConfigMaps, Services e ResourceQuota independentes por namespace.
+ConfigMaps, Services e quotas independentes por namespace.
 ```
 
-### Por que GitHub Environments
+Tabela completa e como ligar o QA: [`02-ambientes.md`](02-ambientes.md).
 
-Com repositórios públicos, os Environments resolvem três problemas sem
-ferramenta extra:
+### Por que usar GitHub Environments
 
-1. **Secrets por ambiente.** `SSH_PRIVATE_KEY` e o host do cluster existem com
-   o mesmo nome nos dois ambientes. O workflow é um só; o valor muda conforme o
-   `environment:` declarado no job.
-2. **Aprovação manual antes de produção.** No environment `prod`, marque
-   *Required reviewers*. O deploy fica parado esperando um clique, mesmo com o
-   merge em `main` já feito. É o portão de produção.
-3. **Restrição de branch.** `prod` só aceita deploy a partir de `main`; `qa` só
-   a partir de `develop`. Mesmo que alguém dispare o workflow manualmente da
-   branch errada, o GitHub recusa.
+1. **Secrets por ambiente.** O mesmo nome pode ter valores diferentes em `qa` e
+   `prod`. O workflow é um só.
+2. **Aprovação manual antes de produção.** No Environment `prod`, marque
+   *Required reviewers*. O deploy fica parado até alguém aprovar, mesmo com o
+   merge feito. É o portão de produção.
+3. **Restrição de branch.** `prod` só aceita deploy de `main`, e `qa` só de
+   `develop`.
 
-Bônus: a aba *Deployments* do repositório passa a mostrar o histórico de
-implantações com commit, autor e horário — documentação automática do que subiu
-e quando.
+Bônus: a aba *Deployments* do repositório mostra o histórico de implantações, com
+commit, autor e horário.
 
-### Nomenclatura
+### Nomes
 
 ```text
 namespace volta-qa      Services: api, api-redis, chatbot
 namespace volta-prod    Services: api, api-redis, chatbot
 ```
 
-O nome do Service é igual nos dois namespaces — quem diferencia é o namespace,
-não o nome. Isso mantém os manifestos `base/` idênticos e joga toda a variação
-para os overlays.
+O nome do Service é o mesmo nos dois namespaces. Quem diferencia é o namespace.
+Assim os manifestos de `base/` ficam idênticos e a variação vai para os overlays.
 
 ### Orçamento da EC2
 
-A t3.medium é cobrada por hora ligada. O EBS de 30 GB (~US$ 2,40/mês) e o
-Elastic IP (~US$ 3,60/mês) são cobrados mesmo com a instância parada.
+A t3.medium é cobrada por hora ligada. O disco de 30 GB (~US$ 2,40/mês) e o
+Elastic IP (~US$ 3,60/mês) são cobrados mesmo com a máquina desligada.
 
-| Cenário | Custo estimado/mês | Cabe nos US$ 50? |
+| Cenário | Custo/mês | Cabe nos US$ 50? |
 |---|---|---|
 | Ligada ~2 h/dia | ~US$ 10 | Sim, com folga |
 | Ligada ~8 h/dia | ~US$ 17 | Sim |
-| Ligada 24/7 | ~US$ 37 | Consome o crédito em ~5 semanas |
+| Ligada 24h | ~US$ 37 | Gasta o crédito em ~5 semanas |
 
-Três regras:
+Regras:
 
-- **A instância sobe sob demanda**, por workflow manual (`workflow_dispatch`), e
-  para sozinha após ~15 minutos sem tráfego de rede, via alarme do CloudWatch.
-- **QA fica com `replicas: 0` por padrão.** Sobe quando alguém vai validar.
-- **Na apresentação, suba a instância 10 minutos antes.** k3s leva ~1 minuto
-  para ficar pronto e os pods mais um pouco. O mesmo vale para o Neon, cuja
-  instância de computação também entra em scale-to-zero por inatividade.
+- **A máquina liga sob demanda**, por workflow manual, e **desliga sozinha** após
+  ~15 min sem tráfego (alarme do CloudWatch).
+- **O QA fica com `replicas: 0`** por padrão. Liga quando alguém vai validar.
+- **Em apresentações, ligue 10 minutos antes.** O mesmo vale para o Neon.
 
 ### Restrições do AWS Academy Learner Lab
 
-Não é uma conta AWS comum, e as restrições moldaram a arquitetura:
-
 | Restrição | Consequência |
 |---|---|
-| Sem permissão para criar roles/usuários IAM | **OIDC no Actions é inviável** → deploy por SSH |
-| Sem Identity Providers | idem |
-| Tipos de EC2 limitados até `large` | t3.medium é o teto prático de custo/benefício |
-| Regiões `us-east-1` / `us-west-2` | Latência maior, aceita |
-| Credenciais de sessão expiram em 4 h | Nada de credencial AWS em secret do GitHub; a EC2 usa IMDS |
-| Instância reinicia com IP público novo | **Elastic IP é obrigatório** |
-| `LabRole` e `LabInstanceProfile` já existem | Reaproveitados para o acesso ao S3 e ao CloudWatch |
+| Não cria roles nem usuários IAM | **OIDC não é possível**, então o deploy é por SSH |
+| Sem Identity Providers | Idem |
+| EC2 limitada até `large` | A t3.medium é o melhor custo-benefício |
+| Só `us-east-1` e `us-west-2` | Latência maior, aceita |
+| Credenciais expiram em 4 h | Nenhuma credencial AWS vai para secret da aplicação. A EC2 usa o IMDS |
+| A instância reinicia com IP novo | **Elastic IP é obrigatório** |
+| `LabRole` e `LabInstanceProfile` já existem | São reaproveitados para S3 e CloudWatch |
 
 ---
 
 ## 9. Estratégia de GitHub Actions
 
-### A regra de decisão: workflow local ou reusable no DevOps?
+### Regra de decisão: workflow local ou reutilizável?
 
 > **O que muda junto, mora junto.**
 
 | Pergunta | Se sim → |
 |---|---|
-| Depende da árvore de código do repositório (compilar, testar, lintar)? | Workflow local |
-| É a mesma coisa em 2+ repositórios, mudando só parâmetros? | Reusable no DevOps |
-| Mexe com registry, credenciais ou plataforma de deploy? | Reusable no DevOps |
-| Uma quebra aqui deveria parar os 6 repositórios de uma vez? | Pense duas vezes |
+| Depende do código do repositório (compilar, testar, lintar)? | Workflow local |
+| É igual em 2+ repositórios, mudando só parâmetros? | Reutilizável no DevOps |
+| Mexe com registro de imagens, credenciais ou plataforma de deploy? | Reutilizável no DevOps |
+| Uma quebra aqui pararia todos os repositórios de uma vez? | Pense duas vezes |
 
-| Componente | Onde vive | Por quê |
+| Componente | Onde fica | Por quê |
 |---|---|---|
-| Build + teste da API (Maven) | Local na API | Muda quando o `pom.xml` muda |
-| Build + teste do Mobile (Gradle) | Local no Mobile | Idem |
-| Build + teste do Website (npm) | Local no Website | Idem |
-| Build Docker + push GHCR | **Reusable no DevOps** | Idêntico para API e Chatbot |
-| Deploy no k3s | **Reusable no DevOps** | Idêntico para os dois serviços |
-| Validação de PR | **Reusable no DevOps** | Regra da organização, não da aplicação |
-| Limpeza do GHCR | Workflow próprio do DevOps | Agendado, não é chamado por ninguém |
+| Build e teste da API (Maven) | Local, na API | Muda quando o `pom.xml` muda |
+| Build e teste do Mobile (Gradle) | Local, no Mobile | Idem |
+| Build e teste do Website (npm) | Local, no Website | Idem |
+| Build Docker + push no GHCR | **Reutilizável** | Igual para API e Chatbot |
+| Deploy no k3s | **Reutilizável** | Igual para os três serviços |
+| Validação de PR | **Reutilizável** | Regra da organização |
+| Limpeza do GHCR | Workflow próprio do DevOps | Roda por agendamento |
 
-A tentação errada é centralizar o CI das linguagens no DevOps ("assim não
-duplica"). Não duplica mesmo, mas cria duas patologias: mudar o `pom.xml` passa
-a exigir PR em outro repositório, e um erro no workflow de build derruba os seis
-repositórios ao mesmo tempo. O build de Maven, Gradle, npm e pip não é a mesma
-coisa parametrizada — é código diferente.
-
-Com o DevOps público, **todos os repositórios da organização conseguem chamar
-os reusable workflows**, sem configuração de acesso.
+A tentação errada é centralizar também o CI de cada linguagem. Parece evitar
+duplicação, mas faz qualquer mudança no `pom.xml` exigir PR em outro repositório
+e faz um erro derrubar todos de uma vez. Maven, Gradle, npm e pip são
+ferramentas diferentes, não a mesma coisa com parâmetros.
 
 ### Convenções obrigatórias
 
 ```yaml
 jobs:
-  build-test:          # nome padronizado — é o que o ruleset exige
+  build-test:          # nome padronizado: é o que o ruleset exige
 
 permissions:
-  contents: read       # mínimo; eleva só onde precisa
+  contents: read       # o mínimo; aumente só onde precisa
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 ```
 
-Exceção ao `cancel-in-progress`: nos jobs de **deploy**, use `false`. Cancelar
-um deploy no meio deixa o ambiente em estado indefinido.
+Exceção: em jobs de **deploy**, use `cancel-in-progress: false`. Cancelar um
+deploy no meio deixa o ambiente em estado incerto.
 
-### Versionamento dos reusable workflows
+### Versionamento dos workflows reutilizáveis
 
-Referencie por tag, nunca por `main` móvel:
+Referencie por tag, nunca pela `main`:
 
 ```yaml
-uses: app-volta/DevOps/.github/workflows/reusable-docker-build-push.yml@v1
+uses: app-volta/volta-devops/.github/workflows/reusable-docker-build-push.yaml@v1
 ```
 
-Crie a tag `v1` no DevOps e mova-a quando quiser propagar mudanças compatíveis.
-Sem isso, um commit errado no DevOps quebra os outros repositórios no mesmo
-instante.
+Crie a tag `v1` e mova-a quando quiser propagar mudanças compatíveis. Sem isso,
+um commit errado aqui quebra todos os outros repositórios na hora.
 
 ---
 
@@ -589,76 +534,69 @@ instante.
 ### API e Chatbot
 
 ```text
-ci.yml       on: pull_request [develop, main] + push [develop, main]
-             jobs: validate-pr (só em PR) | build-test
+ci.yml   gatilho: pull_request [develop, main] + push [develop, main]
+         jobs: validate-pr (só em PR) | build-test
 
-cd.yml       on: push [develop, main] + workflow_dispatch
-             jobs: build-test → docker (reusable) → deploy (reusable)
-                   environment resolvido pela branch: develop→qa, main→prod
+cd.yml   gatilho: push [develop, main] + workflow_dispatch
+         jobs: build-test → docker (reutilizável) → deploy (reutilizável)
+         ambiente pela branch: develop→qa, main→prod
 ```
 
-O portão de produção não é mais um workflow separado: é o *Required reviewer*
-do Environment `prod`, que segura o job de deploy até alguém aprovar.
+O portão de produção é o *Required reviewer* do Environment `prod`, que segura o
+job de deploy até alguém aprovar.
 
 ### Website
 
 ```text
-ci.yml       on: pull_request [develop, main] + push [develop, main]
-             jobs: validate-pr | build-test (lint, tsc, build)
+ci.yml   jobs: validate-pr | build-test (lint, tsc, build)
 ```
 
-Sem `cd.yml`: a integração nativa da Vercel cuida do deploy (seção 17).
+Sem `cd.yml`: a integração nativa da Vercel faz o deploy.
 
 ### Mobile
 
 ```text
-ci.yml       jobs: validate-pr | build-test → upload do APK
+ci.yml   jobs: validate-pr | build-test → upload do APK
 ```
 
 ### Database
 
 ```text
-ci.yml       jobs: validate-pr | build-test (scripts em Postgres efêmero)
+ci.yml   jobs: validate-pr | build-test (scripts em Postgres temporário)
 ```
 
-### DevOps
+### DevOps (este repositório)
+
+Arquivos que existem hoje em `.github/workflows/`:
 
 ```text
-.github/workflows/
-├── reusable-validate-pr.yaml         (workflow_call)
-├── reusable-docker-build-push.yaml   (workflow_call)
-├── reusable-k3s-deploy.yaml          (workflow_call)
-├── dispatch-deploy.yaml              (repository_dispatch + workflow_dispatch)
-├── ec2-power.yaml                    (workflow_dispatch)
-├── ci.yaml                           (lint de YAML e do Compose)
-└── ghcr-cleanup.yaml                 (schedule mensal + workflow_dispatch)
+reusable-validate-pr.yaml         (workflow_call)
+reusable-docker-build-push.yaml   (workflow_call)
+reusable-k3s-deploy.yaml          (workflow_call)
+dispatch-deploy.yaml              (repository_dispatch + workflow_dispatch)
+ec2-power.yaml                    (workflow_dispatch)
+ghcr-cleanup.yaml                 (agendado, mensal + manual)
 ```
 
-### Arquivos de apoio
+> **Planejado, ainda não existe:** um `ci.yaml` com a validação dos YAML e do
+> Compose, o `.github/CODEOWNERS` e o `.github/dependabot.yml`.
 
-```text
-.github/CODEOWNERS
-.github/dependabot.yml
-.github/pull_request_template.md   ← herdado do repo .github da org
-```
-
-O repositório `.github` da organização fornece templates de PR e issue como
-padrão para os repos sem os seus próprios. CODEOWNERS e Dependabot **não** são
-herdados — precisam existir em cada repositório.
+O repositório `.github` da organização fornece templates de PR e de issue para os
+repositórios que não têm os seus. CODEOWNERS e Dependabot **não** são herdados e
+precisam existir em cada repositório.
 
 ---
 
-## 11. Workflows reutilizáveis no DevOps
+## 11. Workflows reutilizáveis
 
-### 11.1 `reusable-validate-pr.yml`
+### 11.1 `reusable-validate-pr.yaml`
 
-Sem inputs — lê o contexto do PR herdado do workflow chamador. Verifica:
+Não tem parâmetros. Lê o contexto do PR e verifica:
 
-- nome da branch contra o regex da seção 4;
-- base do PR permitida (feature → `develop`; `develop` → `main`; hotfix
-  `fix/*` vindo de `main` → `main`);
-- título do PR em Conventional Commits — importa porque o squash merge usa o
-  título do PR como mensagem de commit.
+- o nome da branch (regex da seção 4);
+- o destino do PR (feature → `develop`; `develop` → `main`; hotfix `fix/*` → `main`);
+- o título no padrão Conventional Commits, que importa porque o squash merge usa o
+  título do PR como mensagem do commit.
 
 ### 11.2 `reusable-docker-build-push.yaml`
 
@@ -669,12 +607,12 @@ secrets:  devops-dispatch-token
 outputs:  image, image-tag        # ghcr.io/app-volta/api, qa-a1b2c3d
 ```
 
-Valida o `environment` (só aceita `qa` ou `prod`), faz login no GHCR com
-`GITHUB_TOKEN`, build para `linux/amd64`, cache de camadas via `type=gha`, tags
-da seção 16, labels OCI e push condicional.
+O que faz: aceita só `qa` ou `prod` como ambiente, faz login no GHCR com o
+`GITHUB_TOKEN`, gera a imagem para `linux/amd64` com cache de camadas, aplica as
+tags da seção 16 e envia.
 
-Quando `notify-devops` está ligado, o último passo dispara `repository_dispatch`
-para o repositório DevOps:
+Se `notify-devops` estiver ligado, o último passo avisa este repositório
+(`repository_dispatch`):
 
 ```json
 {
@@ -690,372 +628,312 @@ para o repositório DevOps:
 }
 ```
 
-O `GITHUB_TOKEN` do repositório de origem **não** consegue disparar dispatch
-cross-repo. É preciso um PAT com escrita no DevOps, no secret
-`devops-dispatch-token`; o workflow falha explicitamente se ele estiver
-ausente.
+O `GITHUB_TOKEN` não consegue disparar workflow em outro repositório. É preciso um
+PAT com escrita neste repositório, guardado no secret `devops-dispatch-token`. O
+workflow falha de propósito se ele estiver ausente.
 
 ### 11.3 `reusable-k3s-deploy.yaml`
 
-Substitui o antigo `reusable-render-deploy.yml`, removido junto com o Render.
-
 ```yaml
-inputs:   environment, service, image, image-tag, health-url, rollout-timeout
-secrets:  ssh-private-key, ssh-host
+inputs:   environment, service, image, image-tag, health-url, rollout-timeout, qa-smoke
+secrets:  ssh-private-key
 ```
 
-Antes de editar o overlay, o workflow verifica se o runner já disponibiliza o
-binário `kustomize`. Runners hospedados pelo GitHub podem trazê-lo instalado;
-nesse caso ele é reutilizado. A versão fixada `5.4.3` só é instalada quando o
-binário não existe, evitando o erro do instalador ao tentar sobrescrever
-`/usr/local/bin/kustomize`.
+O host (`SSH_HOST`) vem da variável do repositório.
 
-Responsabilidades previstas:
+Passos do deploy:
 
-1. lê as imagens atuais dos três Deployments por SSH e preserva as dos serviços não selecionados no overlay temporário;
-2. `kustomize edit set image <service>=<image>:<tag>` no overlay do ambiente no runner;
-3. substituição do IP nos hosts e envio do overlay por SSH para a EC2;
-4. `kubectl apply -k kubernetes/overlays/<env>`;
-5. verifica se as imagens dos outros dois serviços continuam iguais;
-6. `kubectl rollout status` e smoke test no health check;
-7. resumo da implantação no `GITHUB_STEP_SUMMARY`.
+1. Lê por SSH as imagens atuais dos três Deployments e guarda as dos serviços
+   **não selecionados**.
+2. Roda `kustomize edit set image` e troca o IP no overlay temporário do runner.
+3. Envia os manifestos para a EC2 por `scp`.
+4. Roda `kubectl apply -k kubernetes/overlays/<ambiente>`.
+5. Confere se as imagens dos outros dois serviços continuam iguais.
+6. Roda `kubectl rollout status` (só passa quando a verificação de saúde passa) e
+   um smoke test no health check.
+7. Escreve um resumo no `GITHUB_STEP_SUMMARY`.
 
-O workflow não commita o overlay: as regras do repositório exigem que mudanças
-em `main` passem por Pull Request. A tag e o resultado ficam no resumo e no
-histórico da execução do Actions.
+O `kustomize` só é instalado (versão `5.4.3`) se o runner ainda não tiver o
+binário.
 
-Declara `environment: ${{ inputs.environment }}` — é esse job que fica parado
-esperando a aprovação em produção. Em ordem:
+O workflow **não** faz commit do overlay. As regras do repositório exigem PR para
+mudar `main`. A tag e o resultado ficam no histórico do Actions.
 
-1. `kustomize edit set image` e resolução do IP no overlay temporário do runner;
-2. `scp` da pasta `kubernetes/` para a instância;
-3. `kubectl apply -k kubernetes/overlays/<env>`;
-4. `kubectl rollout status` — só retorna sucesso quando a readiness probe passa,
-   e é essa a verificação real de que a aplicação subiu;
-5. smoke test opcional pelo ingress, que valida o caminho completo (Traefik →
-   Service → pod) que o `rollout status` sozinho não cobre.
+O job declara `environment: ${{ inputs.environment }}`. É ele que fica parado
+esperando aprovação em produção.
 
-Quando o Deployment está com `replicas: 0` (o padrão em QA), o rollout e o
-smoke test são pulados com um aviso. A imagem fica preparada para subir quando
-alguém escalar.
+Se o Deployment estiver com `replicas: 0` (padrão em QA), o rollout e o smoke test
+são pulados com um aviso. A imagem fica pronta para quando alguém ligar o
+serviço.
 
 ### 11.3.1 `dispatch-deploy.yaml`
 
-Ponto de entrada do deploy, com dois gatilhos:
+É a porta de entrada do deploy, com dois gatilhos:
 
-- **`repository_dispatch`** (tipo `deploy`) — automático, disparado pelos
-  repositórios de aplicação logo após publicarem a imagem;
-- **`workflow_dispatch`** — manual, para reimplantar uma tag antiga sem rebuild.
-  É o caminho de rollback pela interface.
+- **`repository_dispatch`** (tipo `deploy`): automático, disparado pelos
+  repositórios de aplicação depois de publicar a imagem;
+- **`workflow_dispatch`**: manual, para reimplantar uma tag antiga sem rebuild. É
+  o caminho de rollback pela interface.
 
-O payload do dispatch vem de fora deste repositório, então nada nele é usado sem
-validação: serviço e ambiente conferidos contra uma lista fechada, tag conferida
-contra o padrão `<env>-<sha7>`, e — o check que mais importa — **o prefixo da
-tag precisa bater com o ambiente alvo**, o que impede implantar uma imagem de QA
-em produção.
+Como o aviso vem de fora deste repositório, nada é usado sem validação:
 
-### 11.4 `ghcr-cleanup.yml`
+- serviço e ambiente são conferidos contra uma lista fechada;
+- a tag precisa seguir `<env>-<sha7>`;
+- **o prefixo da tag precisa ser igual ao ambiente de destino** (isso impede
+  implantar uma imagem de QA em produção);
+- `qa-smoke` só vale para o chatbot em QA.
 
-Agendado mensalmente + `workflow_dispatch`. Remove versões sem tag e mantém as
-10 mais recentes. **Nunca** toca em `latest` nem em `qa`.
+### 11.4 `ghcr-cleanup.yaml`
 
-Requer um PAT com escopo `delete:packages` no secret `GHCR_CLEANUP_TOKEN`: o
-`GITHUB_TOKEN` do DevOps não tem permissão sobre pacotes cujo repositório de
-origem é outro.
+Roda uma vez por mês (e manualmente). Remove versões **sem tag** e mantém as 10
+mais recentes de `api`, `api-redis` e `chatbot`.
+
+Precisa de um PAT com escopo `delete:packages` no secret `GHCR_CLEANUP_TOKEN`,
+porque o `GITHUB_TOKEN` não tem permissão sobre pacotes de outros repositórios.
 
 ---
 
-## 12. Pipelines de build, testes e qualidade
+## 12. Build, testes e qualidade
 
-### API (Java 21 / Spring Boot / Maven)
+### API (Java 21, Spring Boot, Maven)
 
 ```text
-checkout → setup-java (temurin 21, cache: maven) → mvn -B verify
-        → upload do relatório surefire
+checkout → setup-java (temurin 21, cache maven) → mvn -B verify → relatório surefire
 ```
 
-`mvn -B verify` cobre num comando só dependências, compilação, testes e
-empacotamento. O cache do Maven vem pronto no `setup-java`.
+O `mvn -B verify` faz dependências, compilação, testes e empacotamento em um
+comando.
 
-Qualidade proporcional: **Spotless ou Checkstyle** em modo verificação.
-Formatação consistente reduz conflito bobo de merge e é a verificação com melhor
-relação custo/benefício num trabalho em grupo. SonarQube fica de fora: exige
-servidor ou conta na nuvem e não gera ação que o grupo vá tomar.
+Qualidade proporcional: **Spotless ou Checkstyle** em modo de verificação.
+Formatação consistente evita conflito bobo de merge. O SonarQube fica de fora:
+exige servidor ou conta e não gera ações que o grupo vá tomar.
 
-### Mobile (Android / Java / Gradle)
+### Mobile (Android, Java, Gradle)
 
 ```text
 checkout → setup-java 17 → setup-gradle (cache)
-        → assembleDebug → testDebugUnitTest → lintDebug
-        → upload do APK
+        → assembleDebug → testDebugUnitTest → lintDebug → upload do APK
 ```
 
-O SDK do Android já vem no runner. Testes instrumentados (emulador) ficam fora
-do CI: lentos e instáveis.
+O SDK do Android já vem no runner. Testes com emulador ficam fora do CI: são
+lentos e instáveis.
 
-### Chatbot (Python / FastAPI)
+### Chatbot (Python, FastAPI)
 
 ```text
-checkout → setup-python 3.12 (cache: pip) → pip install → ruff check → pytest
+checkout → setup-python 3.12 (cache pip) → pip install → ruff check → pytest
 ```
 
-O Ruff substitui flake8 + isort + black com uma ferramenta. **Não chame a LLM
-real no CI** — torna o pipeline lento, não determinístico e consome cota paga.
+O Ruff substitui flake8, isort e black. **Não chame a LLM real no CI**: deixa a
+esteira lenta, imprevisível e gasta cota paga.
 
-### Website (TypeScript / React / Vite)
+### Website (TypeScript, React, Vite)
 
 ```text
-checkout → setup-node 20 (cache: npm) → npm ci → npm run lint
+checkout → setup-node 20 (cache npm) → npm ci → npm run lint
         → npx tsc --noEmit → npm run build
 ```
 
-`npx tsc --noEmit` merece destaque: o Vite transpila TypeScript **sem verificar
-tipos**. Sem esse passo, erro de tipagem passa direto e só aparece em runtime.
+O `tsc --noEmit` é importante porque o Vite **não verifica tipos**. Sem ele, erros
+de tipagem só aparecem na execução.
 
 ### Database (SQL)
 
 ```text
-checkout → service container postgres:16
-        → 01-schema.sql → 02-views.sql → 03-procedures.sql
-          → 04-triggers.sql → 05-dataload.sql
-        → consultas de sanidade
+checkout → Postgres 16 → 01-schema.sql → 02-views.sql → 03-procedures.sql
+         → 04-triggers.sql → 05-dataload.sql → consultas de sanidade
 ```
 
 O banco nasce e morre dentro do runner. Exige uma convenção: **prefixo numérico
-de ordem nos arquivos** — sem ela não há como automatizar, nem como o Compose
-montar o banco local a partir dos mesmos artefatos.
+nos arquivos** para definir a ordem.
 
 ---
 
 ## 13. Segurança e secrets
 
-### Ponto de atenção 1: imagens públicas
+> Onde cada segredo mora e como criá-lo: [`03-secrets.md`](03-secrets.md).
 
-A decisão de publicar as imagens do GHCR como públicas resolve storage e
-credencial, mas transfere uma responsabilidade: **tudo dentro da imagem é
-público**. Regras que passam a ser obrigatórias:
+### Atenção 1: imagens públicas
 
-- `.dockerignore` **precisa** excluir `.env`, `*.pem`, `*.key`,
+Tudo dentro da imagem é público. Por isso:
+
+- o `.dockerignore` **precisa** excluir `.env`, `*.pem`, `*.key` e
   `application-local.yml`;
-- `application.yml` só pode conter placeholders (`${DB_PASSWORD}`), nunca
-  valores;
-- nenhuma chave de API, senha ou secret em `ENV` ou `ARG` do Dockerfile;
-- um JAR é decompilável — a imagem entrega o código compilado a quem baixar.
+- `application.yml` só tem placeholders (`${DB_PASSWORD}`), nunca valores;
+- nada de chaves, senhas ou segredos em `ENV` ou `ARG` do Dockerfile;
+- um JAR pode ser decompilado, então a imagem entrega o código a quem baixar.
 
-Teste de cinco minutos que vale fazer uma vez:
+Teste de cinco minutos, vale fazer uma vez:
 
 ```bash
 docker run --rm -it ghcr.io/app-volta/api:latest sh
 ```
 
-### Ponto de atenção 2: repositórios públicos
+### Atenção 2: repositórios públicos
 
-Histórico público. Um secret commitado e removido depois **continua no
-histórico**. Ligue **secret scanning e push protection** em todos os
-repositórios — gratuito em repo público, e bloqueia o push antes de o token
-entrar no histórico.
+O histórico é público. Segredo apagado continua no histórico. Ligue **secret
+scanning** e **push protection**.
 
-### O que fica ligado, custo próximo de zero
+### O que fica ligado (custo quase zero)
 
-- **`permissions` mínimas em todo workflow**, elevando só onde necessário.
+- **`permissions` mínimas** em todo workflow.
 - **Dependabot** para maven, gradle, npm, pip, docker e github-actions.
-- **Pin de actions**: `@v4` para oficiais, SHA completo para terceiros.
-- **CodeQL** — em repositório público é um toggle na interface e cobre Java,
-  Python e JavaScript. Opcional, mas é o item de segurança demonstrável mais
-  barato disponível.
+- **Actions fixadas**: `@v4` para as oficiais, SHA completo para as de terceiros.
+- **CodeQL**: é só um botão em repositório público. Cobre Java, Python e
+  JavaScript.
 
-Fora do escopo, com justificativa: DAST, assinatura de imagem, SBOM e scan de
-container. São boas práticas corporativas que não geram ação acionável aqui.
+Fora do escopo, de propósito: DAST, assinatura de imagem, SBOM e scan de
+container. São boas práticas de empresa, mas não geram ação útil aqui.
 
-### Classificação da informação
+### Onde cada informação fica
 
-| Informação | Classificação | Onde fica |
+| Informação | Tipo | Onde fica |
 |---|---|---|
-| `SSH_PRIVATE_KEY` | **Secret de repositório** | GitHub (DevOps) |
-| `SSH_HOST` (Elastic IP) | Variable de repositório | GitHub (DevOps) |
-| `DEVOPS_DISPATCH_TOKEN` (PAT) | Secret de repositório | GitHub (repos de app) |
-| `GHCR_CLEANUP_TOKEN` (PAT) | Secret de repositório | GitHub (DevOps) |
+| `SSH_PRIVATE_KEY` | Secret | GitHub (DevOps) |
+| `SSH_HOST` (Elastic IP) | Variable | GitHub (DevOps) |
+| `DEVOPS_DISPATCH_TOKEN` (PAT) | Secret | GitHub (repositórios de aplicação) |
+| `GHCR_CLEANUP_TOKEN` (PAT) | Secret | GitHub (DevOps) |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | Secrets temporários | GitHub (DevOps), só para ligar/desligar a EC2 |
 | Senha do Postgres (Neon) | Secret | `Secret` do namespace no k3s |
-| String de conexão MongoDB Atlas | Secret | `Secret` do namespace no k3s |
-| `JWT_SECRET` | Secret | `Secret` do namespace (**diferente por namespace**) |
-| Chave de API da LLM | Secret | `Secret` do namespace no k3s |
-| Credenciais AWS (S3) | Temporárias | IMDS da EC2 via `LabInstanceProfile` |
-| `GITHUB_TOKEN` | Automático | Gerado pelo Actions a cada execução |
-| URL pública da API por ambiente | Variable | `vars` do Environment |
-| `VITE_API_BASE_URL` | Variable (**nunca secret**) | Painel da Vercel, por ambiente |
-| Versões de Java/Node/Python | Versionado no Git | Dentro do workflow |
-| Dockerfiles, Compose, manifestos k8s | Versionado no Git | Repositório |
-| `.env.example` (chaves sem valores) | Versionado no Git | Repositório |
+| String de conexão do MongoDB | Secret | `Secret` do namespace no k3s |
+| `JWT_KEY` | Secret | `Secret` do namespace (**diferente por ambiente**) |
+| Chaves de API da LLM | Secret | `Secret` do namespace no k3s |
+| Credenciais AWS da aplicação (S3) | Temporárias | IMDS da EC2, via `LabInstanceProfile` |
+| `GITHUB_TOKEN` | Automático | Criado pelo Actions a cada execução |
+| `VITE_*` do Website | Variable (**nunca secret**) | Painel da Vercel |
+| Dockerfiles, Compose e manifestos | Versionado | Repositório |
+| `.env.example` (chaves sem valores) | Versionado | Repositório |
 | `.env` (com valores) | **Nunca versionado** | Máquina local |
 
-### Onde o secret realmente mora
+### Onde o segredo da aplicação realmente fica
 
-**Os secrets da aplicação não ficam no GitHub.** Senha de banco, chave de LLM e
-`JWT_SECRET` viram `Secret` do Kubernetes, criados manualmente uma vez por
-namespace, porque quem precisa deles é o container em execução — não o
-pipeline. O GitHub guarda apenas o que o *pipeline* precisa: a chave SSH e os
-PATs.
+**Os segredos da aplicação não ficam no GitHub.** Senhas de banco, chaves de LLM e
+JWT viram `Secret` do Kubernetes, criados à mão uma vez por namespace, porque
+quem precisa deles é o container rodando, não a esteira. O GitHub guarda só o que
+a *esteira* precisa: a chave SSH e os tokens.
 
-Credencial AWS é um caso à parte e merece a ênfase: **nenhuma vai para secret do
-GitHub**. As do Learner Lab expiram em 4 horas, o que tornaria a rotação um
-trabalho manual semanal. A EC2 obtém credenciais pelo IMDS através do
-`LabInstanceProfile`, e elas se renovam sozinhas.
+As credenciais AWS da aplicação nunca vão para o GitHub. A EC2 as recebe sozinha
+pelo IMDS (`LabInstanceProfile`) e elas se renovam.
 
-Um `JWT_SECRET` diferente entre QA e PROD não é preciosismo: garante que um
-token emitido em QA não seja aceito em produção.
+Usar `JWT_KEY` diferente em QA e produção garante que um token emitido em QA não
+valha em produção.
 
 ---
 
-## 14. Estratégia de Docker
+## 14. Docker
 
 ### Princípios
 
 - **Multi-stage sempre**: o compilador não vai para produção.
-- **`linux/amd64` obrigatório** — arquitetura da EC2 t3.medium. Quem desenvolve
-  em Mac com Apple Silicon gera `arm64` por padrão e o pod entra em
-  `CrashLoopBackOff` com `exec format error`.
+- **`linux/amd64` obrigatório**, a arquitetura da EC2. Quem usa Mac com Apple
+  Silicon gera `arm64` por padrão, e o pod entra em `CrashLoopBackOff` com
+  `exec format error`.
 - **Usuário não-root** no estágio final.
-- **Porta por variável de ambiente**: definida no ConfigMap do overlay e
-  espelhada no `containerPort` do Deployment.
-- **`.dockerignore` sempre** — com imagem pública, também é controle de
+- **Porta por variável de ambiente**: definida no ConfigMap do overlay e igual ao
+  `containerPort` do Deployment.
+- **`.dockerignore` sempre**. Com imagem pública, ele também é controle de
   segurança.
 
 ### API
 
-Multi-stage com `maven:3.9-eclipse-temurin-21` no build e
-`eclipse-temurin:21-jre-alpine` no runtime. O `COPY pom.xml` antes do `COPY src`
-não é detalhe: enquanto o `pom.xml` não mudar, o Docker reaproveita a camada de
-dependências.
-
-Resultado esperado: ~200 MB, contra ~600 MB com JDK completo.
+Build com `maven:3.9-eclipse-temurin-21` e execução com
+`eclipse-temurin:21-jre-alpine`. Copiar o `pom.xml` antes do `src` permite
+reaproveitar a camada de dependências enquanto o `pom.xml` não mudar. Resultado:
+~200 MB, contra ~600 MB com o JDK completo.
 
 ### Chatbot
 
-`python:3.12-slim`, `pip install --no-cache-dir`, usuário não-root, e
+`python:3.12-slim`, `pip install --no-cache-dir`, usuário não-root e
 `uvicorn --host 0.0.0.0 --port ${PORT:-8000}`.
 
 ### Website
 
-Dockerfile apenas para o Compose local (node build → nginx). Não vai para
-produção: quem publica é a Vercel.
+Dockerfile só para o Compose local (build com Node → nginx). Em produção quem
+publica é a Vercel.
 
-### Rastreabilidade sem processo de release
+### Rastreabilidade
 
 ```dockerfile
 LABEL org.opencontainers.image.source="https://github.com/app-volta/API"
 LABEL org.opencontainers.image.revision="${GIT_SHA}"
 ```
 
-O label `source` vincula o pacote no GHCR ao repositório, fazendo-o aparecer na
-página do repo e herdar permissões.
+O label `source` liga o pacote do GHCR ao repositório.
 
 ---
 
-## 15. Estratégia de Docker Compose
+## 15. Docker Compose
 
-Arquivo em `docker-compose/docker-compose.yaml`.
+Arquivo: `docker-compose/docker-compose.yaml`. Guia de uso:
+[`docker-compose/README.md`](../docker-compose/README.md).
 
-| Serviço | No Compose? | Por quê |
+| Serviço | No Compose? | Motivo |
 |---|---|---|
-| `postgres` | **Sim** | Banco local, inicializado com os scripts do repo Database |
-| `mongo` | **Sim** | Necessário ao Chatbot |
-| `api` | **Sim** (profile `apps`) | Quem trabalha no Mobile precisa da API sem instalar Java |
-| `chatbot` | **Sim** (profile `apps`) | Idem |
-| `website` | **Não** | `npm run dev` local é mais rápido e tem hot reload |
-| `pgadmin` / `mongo-express` | Opcional (profile `tools`) | Útil, não essencial |
-| Mobile | **Não** | Android precisa de SDK e emulador |
-| Proxy reverso | **Não** | Traefik (no cluster) e Vercel já resolvem TLS e roteamento |
+| `postgres` | Sim | Banco local |
+| `mongo` | Sim | Necessário ao Chatbot |
+| `api` | Sim | Quem trabalha no Mobile precisa da API sem instalar Java |
+| `chatbot` | Sim, com `ENVIRONMENT: qa` | Idem |
+| Website | Não | `npm run dev` é mais rápido e tem hot reload |
+| Mobile | Não | Android precisa de SDK e emulador |
+| Proxy reverso | Não | Traefik (no cluster) e Vercel já cuidam disso |
 
-No Compose local, o serviço `chatbot` define `ENVIRONMENT: qa`.
+Os repositórios devem ficar **lado a lado** (`volta-api`, `volta-chatbot`,
+`volta-devops`), porque o Compose usa caminhos relativos como
+`../../volta-api`.
 
-```bash
-docker compose up postgres mongo      # só os bancos (dev de API roda na IDE)
-docker compose --profile apps up      # backend completo (dev de Mobile)
-docker compose --profile tools up     # + interfaces de administração
-```
+> **Planejado, ainda não existe:** *profiles* (`apps`, `tools`), ferramentas de
+> administração (pgAdmin, mongo-express) e um segundo arquivo
+> `docker-compose.ghcr.yml` que usaria as imagens já publicadas (funcionaria sem
+> login, pois as imagens são públicas).
 
-### Fonte única de verdade do schema
-
-O Postgres do Compose é inicializado com **os mesmos scripts do repositório
-Database**, montados em `/docker-entrypoint-initdb.d` — o Postgres executa em
-ordem alfabética tudo o que estiver nessa pasta na primeira inicialização.
-
-Convenção: repositórios clonados lado a lado.
-
-```text
-volta/
-├── API/
-├── Chatbot/
-├── Database/
-└── DevOps/        ← docker compose roda daqui
-```
-
-```yaml
-volumes:
-  - ../../Database/scripts:/docker-entrypoint-initdb.d:ro
-```
-
-### Segundo arquivo: rodar sem compilar nada
-
-`docker-compose.ghcr.yml` usa as imagens já publicadas:
-
-```yaml
-services:
-  api:
-    image: ghcr.io/app-volta/api:qa
-```
-
-Como as imagens são públicas, funciona **sem login e sem clonar nada**. Um
-`docker compose -f docker-compose.ghcr.yml up` e o backend sobe — inclusive na
-máquina do professor, na avaliação.
+A ideia para o futuro é montar no Postgres os mesmos scripts do repositório
+Database em `/docker-entrypoint-initdb.d`, para que a fonte do schema seja uma só.
 
 ---
 
-## 16. Estratégia de GHCR
+## 16. GHCR
 
-### Nomenclatura
+### Nomes
 
 ```text
 ghcr.io/app-volta/api
+ghcr.io/app-volta/api-redis
 ghcr.io/app-volta/chatbot
 ```
 
 Sem `website` (vai para a Vercel). Sem sufixo de ambiente no nome: **a mesma
-imagem serve QA e PROD** — é o que garante que produção rode o artefato
-validado. Ambiente é *tag* e *serviço*, não imagem diferente.
+imagem serve QA e PROD**. O ambiente é *tag* e *serviço*, não uma imagem diferente.
 
 ### Tags
 
 | Tag | Muda? | Para quê |
 |---|---|---|
-| `qa-a1b2c3d` | **Imutável** | A verdade em QA. Todo deploy de QA fixa uma dessas |
-| `prod-a1b2c3d` | **Imutável** | A verdade em PROD |
-| `qa` | Móvel | Aponta para o que está em QA |
-| `prod` | Móvel | Aponta para o que está em PROD |
+| `qa-a1b2c3d` | **Nunca** | O que está em QA. Todo deploy de QA fixa uma tag assim |
+| `prod-a1b2c3d` | **Nunca** | O que está em produção |
+| `qa` | Sim | Aponta para o mais recente de QA |
+| `prod` | Sim | Aponta para o mais recente de produção |
 
-O prefixo do ambiente na tag imutável é deliberado: olhando o `image:` de um
-Deployment dá para saber, sem consultar nada, de qual esteira aquele artefato
-veio. O deploy **sempre** referencia a tag imutável; as móveis são conveniência
-para humanos e para o Compose. É isso que torna o rollback trivial e o histórico
-auditável.
+O prefixo do ambiente na tag permite saber, só olhando o `image:` de um
+Deployment, de qual esteira veio a imagem. O deploy **sempre** usa a tag fixa. As
+tags móveis são só conveniência. É isso que torna o rollback simples e o
+histórico auditável.
 
-Semantic versioning fica de fora: não há processo de release, e versão que
-ninguém incrementa com critério é pior que não ter versão.
+Não usamos versionamento semântico, porque não há processo de release. Uma versão
+que ninguém incrementa com critério é pior do que nenhuma.
 
-### Quando construir e quando publicar
+### Quando construir e publicar
 
 | Evento | Build? | Push? |
 |---|---|---|
-| PR para `develop`/`main` | Não | Não |
+| PR para `develop` ou `main` | Não | Não |
 | Merge em `develop` | Sim | `qa-<sha>` + `qa` |
 | Merge em `main` | Sim | `prod-<sha>` + `prod` |
 
-Não construir imagem no PR mantém o feedback rápido: o CI já compila e testa, e
-o build Docker só é útil depois do merge.
+Não construir imagem no PR deixa o retorno rápido: o CI já compila e testa.
 
-### Autenticação e permissões
+### Permissões
 
-Publicar exige apenas:
+Publicar exige só:
 
 ```yaml
 permissions:
@@ -1063,177 +941,156 @@ permissions:
   packages: write
 ```
 
-Consumir não exige nada: as imagens são públicas.
+Baixar não exige nada, pois as imagens são públicas.
 
 ### Dois passos manuais, uma vez só
 
-1. Em *Organization settings → Packages*, permitir a criação de pacotes
-   **públicos**.
-2. O primeiro push cria o pacote como **privado**. Vá em *Package settings →
-   Change visibility → Public*, uma vez por imagem.
+1. Em *Organization settings → Packages*, permita pacotes **públicos**.
+2. O primeiro push cria o pacote como **privado**. Em *Package settings → Change
+   visibility → Public*, torne-o público (uma vez por imagem).
 
-Se esquecer o passo 2, o pod fica em `ImagePullBackOff` — o k3s não tem
-credencial de registry configurada, por decisão.
+Se esquecer o passo 2, o pod fica em `ImagePullBackOff`.
 
 ### Limpeza
 
-Workflow mensal: apaga versões sem tag e mantém as ~10 tags imutáveis mais
-recentes.
+A limpeza mensal apaga versões sem tag e mantém as 10 mais recentes (seção 11.4).
 
-Cuidado crítico: o k3s guarda a imagem no cache do containerd do nó, mas o
-`imagePullPolicy` e qualquer recriação de pod em um nó limpo voltam ao registry.
-Apagar uma tag em uso **derruba o serviço no próximo restart**. Nunca apague
-`qa` nem `prod`, e mantenha as tags `<env>-<sha>` recentes, que são o alvo de
-rollback.
+Cuidado: apagar uma tag em uso **derruba o serviço no próximo reinício**, porque
+o nó volta ao registro para baixar a imagem. Nunca apague `qa` ou `prod`, e
+mantenha as tags `<env>-<sha>` recentes, que são o alvo do rollback.
 
 ---
 
 ## 17. Deploy: Kubernetes e Vercel
 
-### 17.1 API e Chatbot — k3s em EC2
+### 17.1 API e Chatbot: k3s na EC2
 
-**Por que k3s e não EKS.** O control plane do EKS custa ~US$ 73/mês — 146% do
-crédito do Learner Lab antes de subir um único pod. O k3s é Kubernetes
+**Por que k3s e não EKS?** O EKS cobra ~US$ 73/mês só pelo plano de controle,
+146% do crédito do Learner Lab, antes de rodar um pod. O k3s é Kubernetes
 certificado pela CNCF: mesma API, mesmo `kubectl`, mesmos manifestos. O que se
-perde é alta disponibilidade do control plane, que não é requisito aqui.
+perde é alta disponibilidade, que não é requisito aqui.
 
 | | EKS | **k3s em EC2** (escolhido) | Render (anterior) |
 |---|---|---|---|
-| Requisito "Kubernetes" atendido | Sim | **Sim** | Não |
-| Custo do control plane | ~US$ 73/mês | **US$ 0** | — |
-| Cabe no Learner Lab | Não | **Sim** | — |
+| Atende "usar Kubernetes" | Sim | **Sim** | Não |
+| Custo do plano de controle | ~US$ 73/mês | **US$ 0** | n/a |
+| Cabe no Learner Lab | Não | **Sim** | n/a |
 | Alta disponibilidade | Sim | Não (nó único) | Parcial |
 
-**Topologia.**
+**Estrutura:**
 
 ```text
 EC2 t3.medium (Amazon Linux 2023) + Elastic IP
-└── k3s (single-node, Traefik embutido)
-    ├── namespace volta-qa     → api, api-redis, chatbot   (replicas: 0 por padrão)
+└── k3s (um nó, com Traefik embutido)
+    ├── namespace volta-qa     → api, api-redis, chatbot  (replicas: 0 por padrão)
     └── namespace volta-prod   → api, api-redis, chatbot
 ```
 
-Sem ELB e sem NAT Gateway — os dois maiores sorvedouros de crédito numa conta
-AWS pequena. O Traefik que já vem no k3s faz o papel de ingress.
+Sem load balancer e sem NAT Gateway, os dois maiores gastos de crédito numa conta
+AWS pequena. O Traefik do k3s faz o papel de entrada.
 
-**Ingress e DNS.** `sslip.io` resolve qualquer IP embutido no próprio nome, o
-que dispensa comprar domínio e habilita HTTPS via cert-manager:
+**Endereços.** O `sslip.io` resolve qualquer IP embutido no nome, então não
+precisamos comprar domínio e conseguimos HTTPS com cert-manager:
 
 ```text
-api.qa.<EIP>.sslip.io    → Service api,      namespace volta-qa,   port 8080
-api.<EIP>.sslip.io       → Service api,       namespace volta-prod, port 8080
-ranking.qa.<EIP>.sslip.io → Service api-redis, namespace volta-qa,   port 8081
-ranking.<EIP>.sslip.io    → Service api-redis, namespace volta-prod, port 8081
-chat.qa.<EIP>.sslip.io   → Service chatbot,  namespace volta-qa,   port 8000
-chat.<EIP>.sslip.io      → Service chatbot,  namespace volta-prod, port 8000
+api.qa.<EIP>.sslip.io      → api        (volta-qa,   porta 8080)
+api.<EIP>.sslip.io         → api        (volta-prod, porta 8080)
+ranking.qa.<EIP>.sslip.io  → api-redis  (volta-qa,   porta 8081)
+ranking.<EIP>.sslip.io     → api-redis  (volta-prod, porta 8081)
+chat.qa.<EIP>.sslip.io     → chatbot    (volta-qa,   porta 8000)
+chat.<EIP>.sslip.io        → chatbot    (volta-prod, porta 8000)
 ```
 
-**Kustomize.** `base/` descreve o que é igual nos dois ambientes; os overlays
-descrevem só a diferença.
+**Kustomize.** `base/` é o que é igual nos dois ambientes; cada overlay descreve
+só a diferença.
 
 ```text
 kubernetes/
-├── namespace.yaml            # volta-qa, volta-prod
+├── namespace.yaml
 ├── base/
 │   ├── api/{deployment,service,kustomization}.yaml
 │   ├── api-redis/{deployment,service,kustomization}.yaml
 │   ├── chatbot/{deployment,service,kustomization}.yaml
-│   └── ingress.yaml
+│   ├── ingress.yaml
+│   └── kustomization.yaml
 └── overlays/
-    ├── qa/{kustomization,configmap,replicas-patch}.yaml
+    ├── qa/{kustomization,configmap,https-patch,replicas-patch,cluster-issuer}.yaml
     └── prod/{kustomization,configmap,resources-patch}.yaml
 ```
 
-O deploy roda `kustomize edit set image` no overlay temporário do runner e aplica
-os manifestos na EC2. A tag e o resultado ficam no histórico do GitHub Actions;
-os valores específicos do deploy não são gravados em `main`.
+O deploy roda `kustomize edit set image` num overlay temporário do runner e aplica
+na EC2. A tag e o resultado ficam no histórico do Actions. Os valores de cada
+deploy não são gravados em `main`.
 
-**Autenticação do deploy: SSH.** O Learner Lab não permite criar roles IAM, o
-que elimina OIDC e SSM. Sobra chave SSH: pública no `authorized_keys` da
-instância, privada no secret `SSH_PRIVATE_KEY` do DevOps.
+**Autenticação do deploy: SSH.** O Learner Lab não permite criar roles IAM, o que
+elimina OIDC e SSM. Sobra a chave SSH: a pública fica no `authorized_keys` da
+instância e a privada no secret `SSH_PRIVATE_KEY`.
 
-**Health checks.** `readinessProbe` em `/actuator/health` (API) e `/health`
-(Chatbot); `livenessProbe` com `initialDelaySeconds: 30` e `timeoutSeconds: 5`.
-Sem probe, o `kubectl rollout status` retorna sucesso antes da aplicação estar
-de pé e o deploy fica verde com o serviço quebrado.
+**Verificações de saúde.** A API usa `/actuator/health/readiness` e
+`/actuator/health/liveness`; o Chatbot usa `/health`. Sem essas verificações, o
+`kubectl rollout status` diria "sucesso" antes de a aplicação estar de pé e o
+deploy ficaria verde com o serviço quebrado.
 
-**Secrets no cluster.** Criados manualmente com `kubectl create secret`, uma vez
-por namespace. Sem Sealed Secrets: a complexidade não se paga no escopo
-acadêmico, e a alternativa — commitar segredo cifrado — exigiria gestão de
-chave que ninguém vai manter.
+**Secrets no cluster.** Criados à mão com `kubectl create secret`, uma vez por
+namespace. Não usamos Sealed Secrets: a complexidade não compensa aqui, e exigiria
+gerenciar uma chave que ninguém manteria.
 
-**Fotos do mobile.** Não passam pelo cluster. A API assina uma presigned URL do
-S3 (expiração de 15 min, Content-Type restrito), o mobile envia direto para o
-bucket e a API só registra a referência no banco. Com 512 MB de heap, a
-alternativa — upload atravessando o Spring Boot — não sobreviveria a dois
-usuários simultâneos. As credenciais AWS vêm do IMDS da instância via
-`LabInstanceProfile`, nunca de secret do GitHub.
+**Fotos do mobile.** Não passam pelo cluster. A API gera uma URL assinada do S3
+(expira em 15 min, com tipo de arquivo restrito), o mobile envia direto para o
+bucket e a API só guarda a referência no banco. Com 512 MB de memória, enviar a
+foto pelo Spring Boot não aguentaria dois usuários ao mesmo tempo.
 
-### 17.2 Website — Vercel
+### 17.2 Website: Vercel
 
 | Item | Valor |
 |---|---|
 | Production Branch | `main` |
-| Preview | automático em `develop` e em cada PR |
-| Framework Preset | Vite |
+| Preview | Automático em `develop` e em cada PR |
+| Framework | Vite |
 | Build Command | `npm run build` |
 | Output Directory | `dist` |
-| Env (Production) | `VITE_API_BASE_URL` → API de PROD |
-| Env (Preview) | `VITE_API_BASE_URL` → API de QA |
+| Env (Production) | URL da API de PROD |
+| Env (Preview) | URL da API de QA |
 
-O mapeamento QA/PROD sai de graça: `develop` gera preview com URL estável,
-`main` publica em produção. Como o ruleset bloqueia merge com CI falhando, o
-deploy automático da Vercel é seguro — nada chega em `main` sem passar pelo CI.
+`develop` gera um preview com URL estável (QA) e `main` publica em produção. Como
+o ruleset bloqueia merge com CI falhando, o deploy automático é seguro.
 
-Rollback: a Vercel mantém todos os deployments; basta promover um anterior.
+Rollback: a Vercel guarda todos os deployments; basta promover um anterior.
 
-Ponto de atenção: o plano Hobby é para uso não comercial. Projeto acadêmico se
-enquadra.
+O plano Hobby é para uso não comercial. Um projeto acadêmico se enquadra.
+Configuração completa: [`07-vercel-website.md`](07-vercel-website.md).
 
 ---
 
-## 18. Estrutura de diretórios do DevOps
+## 18. Estrutura do repositório
 
 ```text
-DevOps/
+volta-devops/
 ├── .github/
-│   ├── workflows/
-│   │   ├── reusable-validate-pr.yaml
-│   │   ├── reusable-docker-build-push.yaml
-│   │   ├── reusable-k3s-deploy.yaml      # deploy no cluster
-│   │   ├── dispatch-deploy.yaml          # recebe o repository_dispatch
-│   │   ├── ec2-power.yaml                # sobe/para a instância sob demanda
-│   │   ├── ci.yaml
-│   │   └── ghcr-cleanup.yaml
-│   ├── CODEOWNERS
-│   └── dependabot.yml
+│   └── workflows/
+│       ├── reusable-validate-pr.yaml
+│       ├── reusable-docker-build-push.yaml
+│       ├── reusable-k3s-deploy.yaml
+│       ├── dispatch-deploy.yaml
+│       ├── ec2-power.yaml
+│       └── ghcr-cleanup.yaml
 │
-├── compose/
-│   ├── docker-compose.yml
-│   ├── docker-compose.ghcr.yml
+├── docker-compose/
+│   ├── docker-compose.yaml
 │   ├── .env.example
 │   └── README.md
 │
-├── docker/                      # templates de referência
 ├── kubernetes/
 │   ├── namespace.yaml
-│   ├── base/
-│   │   ├── api/
-│   │   ├── api-redis/
-│   │   ├── chatbot/
-│   │   └── ingress.yaml
-│   └── overlays/
-│       ├── qa/
-│       └── prod/
-├── vercel/
-│   └── configuracao-website.md
+│   ├── base/        (api, api-redis, chatbot, ingress)
+│   └── overlays/    (qa, prod)
+│
 ├── scripts/
-│   ├── setup-local.sh
-│   ├── lib-aws.sh               # convenções compartilhadas
-│   ├── provision-ec2-k3s.sh     # provisionamento idempotente (roda local)
-│   ├── cloud-init-k3s.sh        # user data: instala o k3s
-│   ├── rollback.sh              # rollback de emergência
-│   └── check-health.sh
+│   ├── lib-aws.sh               # funções compartilhadas
+│   ├── provision-ec2-k3s.sh     # cria o cluster (roda local)
+│   ├── cloud-init-k3s.sh        # roda no 1º boot: instala o k3s
+│   ├── update-aws-session.sh    # renova credenciais do Learner Lab
+│   └── rollback.sh              # rollback de emergência
 │
 ├── docs/
 │   ├── 01-arquitetura-cicd.md   ← este documento
@@ -1241,25 +1098,16 @@ DevOps/
 │   ├── 03-secrets.md
 │   ├── 04-runbook-deploy.md
 │   ├── 05-padroes-git.md
-│   └── 06-cluster-k3s.md
+│   ├── 06-cluster-k3s.md
+│   └── 07-vercel-website.md
 │
+├── LICENSE
 └── README.md
 ```
 
-### Modificações em relação à estrutura original
-
-| Mudança | Motivo |
-|---|---|
-| `workflows/` → `.github/workflows/` | Requisito técnico do `workflow_call` |
-| `docker-compose/` → `compose/` | Evita `docker-compose/docker-compose.yml` |
-| `kubernetes/` reintroduzido | Kubernetes virou requisito; manifestos Kustomize versionados aqui |
-| `render/` removido | Render descontinuado em favor do k3s |
-| `docker/` vira pasta de templates | Dockerfile de produção mora junto do código que ele constrói |
-| `vercel/` adicionado | O Website não roda no cluster; a configuração precisa estar versionada |
-
 ---
 
-## 19. Fluxo completo em diagrama
+## 19. Fluxo completo
 
 ```text
 ╔══════════════════════════════════════════════════════════════════════════╗
@@ -1270,15 +1118,15 @@ DevOps/
                             ▼
                   ┌──────────────────────┐
                   │  Pull Request        │
-                  │  base: develop       │
+                  │  destino: develop    │
                   └──────────┬───────────┘
 ╔════════════════════════════▼═════════════════════════════════════════════╗
-║ CI — on: pull_request                                                    ║
+║ CI: em todo pull_request                                                 ║
 ╚══════════════════════════════════════════════════════════════════════════╝
         validate-pr                    build-test
    ┌────────────────────┐      ┌────────────────────────────┐
    │ nome da branch     │      │ checkout                   │
-   │ base permitida     │  ||  │ setup + cache              │
+   │ destino permitido  │  ||  │ setup + cache              │
    │ título do PR       │      │ build / testes / lint      │
    └────────┬───────────┘      └────────────┬───────────────┘
             └───────────────┬───────────────┘
@@ -1289,18 +1137,18 @@ DevOps/
               └──────────────┬───────────────────────────┘
                              ▼  SQUASH MERGE
 ╔══════════════════════════════════════════════════════════════════════════╗
-║ CD QA — on: push develop                                                 ║
+║ DEPLOY DE QA: push em develop                                            ║
 ╚══════════════════════════════════════════════════════════════════════════╝
-   build-test  ──►  docker-build-push  ──►  repository_dispatch ──► DevOps
-                    ┌──────────────────────┐    ┌───────────────────────────┐
-                    │ login GHCR           │    │ kustomize edit set image  │
-                    │ build amd64          │    │ preserva imagens atuais  │
-                    │ tags: qa-a1b2c3d, qa │    │ ssh: kubectl apply -k qa  │
-                    │ push                 │    │ rollout status + /health  │
-                    └──────────────────────┘    └─────────────┬─────────────┘
-                                                              ▼
+   build-test ──► docker-build-push ──► repository_dispatch ──► DevOps
+                  ┌──────────────────────┐   ┌──────────────────────────┐
+                  │ login no GHCR        │   │ kustomize edit set image │
+                  │ build amd64          │   │ preserva outras imagens  │
+                  │ tags: qa-a1b2c3d, qa │   │ ssh: kubectl apply -k qa │
+                  │ push                 │   │ rollout status + /health │
+                  └──────────────────────┘   └────────────┬─────────────┘
+                                                          ▼
                                           k3s: namespace volta-qa
-                                          Neon branch qa / volta_qa
+                                          Neon branch qa / Atlas volta_qa
 
                              │  validação manual em QA (checklist)
                              ▼
@@ -1311,34 +1159,33 @@ DevOps/
               └──────────────────┬───────────────────┘
                                  ▼
 ╔══════════════════════════════════════════════════════════════════════════╗
-║ CD PROD — on: push main                                                  ║
+║ DEPLOY DE PRODUÇÃO: push em main                                         ║
 ╚══════════════════════════════════════════════════════════════════════════╝
-   build-test  ──►  docker-build-push  ──►  ⏸ APROVAÇÃO MANUAL
-                    (tags: prod-a1b2c3d,    (Environment prod:
-                           prod)             required reviewers)
+   build-test ──► docker-build-push ──► ⏸ APROVAÇÃO MANUAL
+                  (tags: prod-a1b2c3d,   (Environment prod:
+                         prod)            required reviewers)
                                                     │
                                                     ▼
                                     ssh: kubectl apply -k prod + smoke test
                                                     │
                                                     ▼
                                         k3s: namespace volta-prod
-                                        Neon branch prod / volta_prod
+                                        Neon branch prod / Atlas volta_prod
 
 ╔══════════════════════════════════════════════════════════════════════════╗
 ║ WEBSITE                                                                  ║
 ╚══════════════════════════════════════════════════════════════════════════╝
-   PR → CI (bloqueante) → Vercel preview do PR
-                        → merge develop → preview de QA
-                        → merge main    → produção
+   PR → CI (bloqueante) → preview da Vercel no PR
+                        → merge em develop → preview de QA
+                        → merge em main    → produção
 
 ╔══════════════════════════════════════════════════════════════════════════╗
 ║ FORA DA ESTEIRA DE DEPLOY                                                ║
 ╚══════════════════════════════════════════════════════════════════════════╝
-  Mobile             → CI + APK como artifact.  Sem CD.
-  Database           → CI em Postgres efêmero.  Sem CD.
-  DevOps             → CI de YAML + limpeza mensal do GHCR + recebe o dispatch.
-  EC2/k3s            → start manual (workflow_dispatch); auto-stop por
-                       inatividade (~15 min, alarme do CloudWatch).
+  Mobile             → CI + APK como artifact. Sem deploy.
+  Database           → CI em Postgres temporário. Sem deploy.
+  DevOps             → limpeza mensal do GHCR + recebe o aviso de deploy.
+  EC2/k3s            → liga manualmente; desliga sozinha após ~15 min ociosa.
   volta-landing-page → fora do ruleset e desta arquitetura.
 ```
 
@@ -1346,177 +1193,161 @@ DevOps/
 
 ## 20. Regras de merge
 
-| De → Para | Estratégia | Aprovação | Checks |
+| De → Para | Tipo de merge | Aprovação | Checks |
 |---|---|---|---|
 | `feat\|fix\|...` → `develop` | **Squash** | 1 | `validate-pr`, `build-test` |
-| `develop` → `main` | **Merge commit** | 1 + CODEOWNER | idem |
-| `fix/*` (de `main`) → `main` | Squash | 1 + CODEOWNER | idem |
-| Push direto | **Bloqueado pelo ruleset** | — | — |
+| `develop` → `main` | **Merge commit** | 1 + CODEOWNER | Idem |
+| `fix/*` (de `main`) → `main` | Squash | 1 + CODEOWNER | Idem |
+| Push direto | **Bloqueado** | n/a | n/a |
 
-### Por que squash de feature para develop
+### Por que squash de feature para develop?
 
-O histórico de `develop` fica com um commit por issue, legível e reversível. Os
-commits intermediários ("wip", "corrige typo") somem — o que é bom, porque não
-têm valor histórico. E como a distribuição de commits entre colaboradores é
-critério de avaliação, um commit limpo por issue conta mais a favor do que
-quarenta commits ruidosos.
+O histórico de `develop` fica com um commit por tarefa, fácil de ler e de
+reverter. Commits como "wip" ou "corrige typo" somem, e isso é bom. Como a
+distribuição de commits entre colaboradores é critério de avaliação, um commit
+limpo por tarefa conta mais do que quarenta commits barulhentos.
 
-### Por que NUNCA squash de develop para main
+### Por que NUNCA squash de develop para main?
 
-O squash cria um commit **novo** em `main`, sem ancestralidade com os commits de
-`develop`. O Git passa a achar que as branches divergiram, e o próximo PR
-`develop → main` traz de volta tudo que já foi mergeado, com conflitos. Depois
-de dois ou três ciclos, a situação vira ingovernável.
+O squash cria um commit **novo** em `main`, sem ligação com os commits de
+`develop`. O Git passa a achar que as branches divergiram e o próximo PR
+`develop → main` traz de volta tudo que já foi mergeado, com conflitos. Depois de
+dois ou três ciclos, fica ingovernável.
 
-Configure em *Settings → General → Pull Requests*:
+Em *Settings → General → Pull Requests*:
 
-- [x] Allow squash merging — *Default to pull request title*
+- [x] Allow squash merging (padrão: título do PR)
 - [x] Allow merge commits
 - [ ] Allow rebase merging
 - [x] Automatically delete head branches
 
 ---
 
-## 21. Estratégia de QA
+## 21. QA
 
-QA é **onde se decide se algo pode ir para produção**. Precisa de três
-propriedades:
+O QA é **onde se decide se algo pode ir para produção**. Precisa de três coisas:
 
-1. **Dados próprios** — branch `qa` separada no Neon e `volta_qa` no Atlas.
-2. **Configuração equivalente à de produção** — mesma imagem, mesmas variáveis
-   com valores diferentes, mesmo health check.
-3. **Ser descartável** — deve dar para apagar e recriar o banco de QA a partir
-   dos scripts do repositório Database sem pedir autorização a ninguém.
+1. **Dados próprios**: branch `qa` no Neon e `volta_qa` no Atlas.
+2. **Configuração igual à de produção**: mesma imagem, mesmas variáveis com
+   valores diferentes, mesmo health check.
+3. **Ser descartável**: dá para apagar e recriar o banco de QA com os scripts do
+   repositório Database, sem pedir autorização.
 
 ### Automático
 
 ```text
-merge em develop → build + testes → imagem (sha-* + qa)
-                 → deploy em volta-<app>-qa → smoke test em /health
+merge em develop → build + testes → imagem (qa-<sha> + qa)
+                 → deploy em volta-qa → smoke test em /health
 ```
 
-### Validação humana antes do PR para `main`
+### Validação manual antes do PR para `main`
 
-- fluxo principal ponta a ponta (Mobile de debug apontando para a API de QA);
-- funcionalidade nova conforme a issue;
-- nada que funcionava antes quebrou;
+- fluxo principal de ponta a ponta (Mobile de debug apontando para a API de QA);
+- funcionalidade nova, conforme a tarefa;
+- nada que funcionava deixou de funcionar;
 - Chatbot respondendo com o banco de QA;
 - Website: preview da Vercel da branch `develop`.
 
-Checklist no template de PR de `develop → main`. Checklist que vive no PR é
-lido; checklist em documento à parte não é.
+Coloque esse checklist no template do PR `develop → main`. Checklist que vive no
+PR é lido; checklist em documento separado não é.
 
 ### Mobile e QA
 
-Gere a variante de debug apontando para a URL da API de QA (via
-`buildConfigField` ou product flavors) e a de release para PROD. O APK de debug
-publicado como artifact é o que o grupo instala para validar.
+Gere a variante de debug apontando para a API de QA (com `buildConfigField` ou
+product flavors) e a de release para PROD. O APK de debug publicado como artifact
+é o que o grupo instala para validar.
 
 ---
 
-## 22. Estratégia de produção
+## 22. Produção
 
-### Portões
+### Os 7 portões
 
 ```text
-1. CI passou no PR para develop        (bloqueante)
-2. Validado em QA                      (checklist)
-3. PR develop → main aprovado por CODEOWNER
-4. CI rodou de novo no merge           (bloqueante)
-5. Imagem publicada (prod-<sha> + prod)
-6. ⏸ Aprovação manual no Environment prod
-7. Deploy + smoke test
+1. CI passou no PR para develop          (automático)
+2. Validado em QA                        (checklist)
+3. PR develop → main aprovado por CODEOWNER   ← ação humana
+4. CI rodou de novo no merge             (automático)
+5. Imagem publicada (prod-<sha> + prod)  (automático)
+6. ⏸ Aprovação manual no Environment prod     ← ação humana
+7. Deploy + smoke test                   (automático)
 ```
 
-Sete portões, dois com ação humana (3 e 6). O resto é automático. Essa é a
-diferença entre processo pesado e processo bem colocado.
+Sete portões, dois com ação humana (3 e 6). O resto é automático.
 
 ### Rollback
 
-**1. `kubectl rollout undo` (segundos).** Volta o Deployment para a revisão
-anterior direto no cluster. É o estanca-sangramento; registre a tag estável
-em uma execução do workflow depois que o serviço estiver recuperado.
+Passo a passo: [`04-runbook-deploy.md`](04-runbook-deploy.md#voltar-uma-versão-rollback).
+Em resumo, em ordem de rapidez:
 
-```bash
-kubectl -n volta-prod rollout undo deployment/api
-```
+1. **`scripts/rollback.sh` (segundos).** Volta o Deployment para a revisão
+   anterior ou para uma tag exata, direto no cluster. Depois que o serviço se
+   recuperar, registre a tag boa numa execução do workflow Deploy.
+2. **Workflow Deploy com uma tag anterior (1–2 min).** É para isso que as tags
+   imutáveis existem: sem rebuild, sem PR, sem esperar o CI. O workflow preserva
+   as imagens dos outros serviços.
+3. **`git revert` de uma mudança de manifesto**, seguido de PR e esteira normal.
+   Serve quando uma mudança versionada causou o problema. Para uma regressão só da
+   aplicação, reimplante a tag anterior.
 
-**2. Redeploy de uma tag `<env>-<sha>` anterior (1–2 minutos).** É para isso que
-as tags imutáveis existem: dispare o workflow de deploy via `workflow_dispatch`
-informando a tag antiga. Sem rebuild, sem PR, sem esperar CI. O workflow lê e
-preserva as imagens atuais dos outros serviços antes de aplicar o overlay.
+Website: promova um deployment anterior no painel da Vercel.
 
-**3. `git revert` de uma mudança de infraestrutura/manifests** → PR → pipeline
-normal. Isso reverte uma mudança versionada que causou o incidente; para uma
-regressão isolada da aplicação, redeploy da tag anterior é o procedimento.
-
-Para o Website, a Vercel promove um deployment anterior pelo painel.
-
-**Regra decorrente:** a limpeza do GHCR nunca pode apagar as tags
-`<env>-<sha>` recentes.
-
-### Runbook
-
-`DevOps/docs/04-runbook-deploy.md`, em uma página: como disparar deploy manual,
-como fazer rollback, onde ficam os logs (`kubectl logs`, `journalctl -u k3s`),
-quem aprova produção, como subir a EC2 quando estiver parada e o que fazer se o
-health check falhar. Escreva **antes** de precisar.
+**Regra:** a limpeza do GHCR nunca pode apagar as tags `<env>-<sha>` recentes.
 
 ---
 
-## 23. Comparação das alternativas arquiteturais
+## 23. Alternativas que comparamos
 
-### 23.1 Multi-repo vs monorepo
+### 23.1 Multi-repo ou monorepo
 
 | | **Multi-repo** (escolhido) | Monorepo |
 |---|---|---|
-| Isolamento de CI | Natural | Exige filtros de caminho |
-| Visibilidade de contribuição individual | **Alta** | Diluída |
+| CI independente | Natural | Exige filtros de caminho |
+| Visibilidade da contribuição individual | **Alta** | Diluída |
 | Mudança que cruza componentes | Vários PRs | Um PR |
-| Duplicação de configuração | Alta (mitigada por reusable workflows) | Baixa |
+| Configuração repetida | Alta (reduzida por workflows reutilizáveis) | Baixa |
 
-Casa com a divisão por disciplina e deixa a atribuição individual evidente, que
-é critério de avaliação.
+Combina com a divisão por disciplina e deixa clara a contribuição de cada
+pessoa, que é critério de avaliação.
 
 ### 23.2 Visibilidade dos repositórios
 
-| | **Públicos** (escolhido) | Privados no Free |
+| | **Públicos** (escolhido) | Privados no plano gratuito |
 |---|---|---|
 | Proteção de branch / ruleset | ✅ | ❌ |
 | Environments com aprovação | ✅ | ❌ |
 | CODEOWNERS | ✅ | ❌ |
-| Minutos de Actions | Ilimitados | 2.000/mês na org |
+| Minutos de Actions | Ilimitados | 2.000/mês na organização |
 | Código fechado | ❌ | ✅ |
 
-Decisão do professor de DevOps, que avalia code review e PR com proteção da
-`main`. Em repositório privado no plano Free esses recursos simplesmente não
-existem — a abertura é o que torna o requisito cumprível.
+A decisão partiu do professor de DevOps, que avalia code review e PR com `main`
+protegida. Em repositório privado no plano gratuito, esses recursos não existem.
 
 ### 23.3 Onde ficam os workflows
 
-| Abordagem | Prós | Contras | Uso aqui |
+| Abordagem | Vantagens | Desvantagens | Uso aqui |
 |---|---|---|---|
-| Duplicar em cada repo | Autonomia total | Corrigir bug = 5 PRs | CI de linguagem |
-| **Reusable no DevOps** | Uma fonte, versionável | Acoplamento entre repos | Docker e deploy |
-| Composite action | Reuso fino de steps | Sem `permissions`/`environment` próprios | Não agora |
-| Starter workflow | Sem acoplamento | Cópias divergem | Bootstrap apenas |
+| Duplicar em cada repositório | Autonomia total | Corrigir um bug = 5 PRs | CI de cada linguagem |
+| **Reutilizável no DevOps** | Uma fonte, com versão | Repositórios ficam acoplados | Docker e deploy |
+| Composite action | Reuso fino de passos | Sem `permissions`/`environment` próprios | Não por ora |
+| Starter workflow | Sem acoplamento | As cópias divergem | Só para começar |
 
-### 23.4 Registry
+### 23.4 Registro de imagens
 
 | | **GHCR** (escolhido) | Docker Hub |
 |---|---|---|
-| Autenticação no CI | `GITHUB_TOKEN`, zero config | Secret com credencial |
-| Rate limit de pull | Sem limite relevante | Limitado no gratuito |
-| Integração com o repo | Nativa | Externa |
+| Login no CI | `GITHUB_TOKEN`, sem configurar | Secret com credencial |
+| Limite de downloads | Sem limite relevante | Limitado no gratuito |
+| Integração com o repositório | Nativa | Externa |
 
 ### 23.5 Hospedagem do Website
 
 | | **Vercel** (escolhido) | Render Static Site | Container nginx |
 |---|---|---|---|
-| Custo | Grátis (Hobby) | Grátis | Consome memória do nó k3s |
+| Custo | Grátis (Hobby) | Grátis | Gasta memória do nó |
 | Preview por PR | ✅ nativo | Parcial | Não |
-| Cold start | Não tem | Não tem | ~1 min |
-| Peças a manter | Nenhuma | Nenhuma | Dockerfile + nginx.conf |
+| Partida a frio | Não tem | Não tem | ~1 min |
+| O que manter | Nada | Nada | Dockerfile + nginx.conf |
 
 ### 23.6 Banco Postgres
 
@@ -1524,130 +1355,122 @@ existem — a abertura é o que torna o requisito cumprível.
 |---|---|---|---|
 | Expira | **30 dias** | Não | Não |
 | Instâncias gratuitas | 1 por workspace | Vários projetos | 1 por conta |
-| Branching de banco | Não | **Sim** | Não |
-| Hiberna por inatividade | Não | Sim (scale-to-zero) | Sim |
+| Branches de banco | Não | **Sim** | Não |
+| Hiberna por inatividade | Não | Sim | Sim |
 | Serve QA + PROD sem gambiarra | Não | **Sim**, via branches | Exigiria 2 contas ou 2 bancos lógicos |
 
-Critério decisivo: o branching do Neon dá QA e PROD isolados dentro do mesmo
-projeto gratuito, sem precisar administrar duas contas nem abrir mão de
-isolamento entre ambientes — o problema que o Aiven exigiria resolver na mão.
+O branching do Neon dá QA e PROD isolados no mesmo projeto gratuito, sem
+administrar duas contas.
 
-### 23.7 Gatilho de deploy
+### 23.7 Como disparar o deploy
 
 | | **repository_dispatch + SSH** (escolhido) | OIDC + SSM | GitOps (Argo CD) |
 |---|---|---|---|
 | Configuração | PAT + chave SSH | Role IAM + agente | Controlador no cluster |
 | Fixa tag imutável | ✅ via kustomize | ✅ | ✅ |
-| Viável no Learner Lab | **Sim** | **Não** (sem IAM) | Sim, mas pesa no nó |
+| Funciona no Learner Lab | **Sim** | **Não** (sem IAM) | Sim, mas pesa no nó |
 | Estado versionado no Git | Não (histórico do Actions) | Não | Sim |
 
-### 23.8 Modelo de branching
+### 23.8 Modelo de branches
 
 | | Git Flow completo | **Simplificado** (escolhido) | Trunk-based |
 |---|---|---|---|
 | Branches permanentes | main, develop, release | main, develop | main |
 | Ambientes | 3+ | 2 | 1–2 |
-| Adequado a equipe pequena | Não | Sim | Sim, com feature flags |
+| Serve a equipe pequena | Não | Sim | Sim, com feature flags |
 
-Trunk-based exigiria feature flags e disciplina de testes que o projeto ainda
-não tem. Duas branches mapeiam diretamente nos dois ambientes, o que torna a
-arquitetura fácil de explicar numa arguição.
+Trunk-based exigiria feature flags e uma disciplina de testes que o projeto ainda
+não tem. Duas branches mapeiam direto nos dois ambientes, o que facilita explicar
+a arquitetura numa arguição.
 
 ---
 
-## 24. Histórico da migração Render → Kubernetes
+## 24. Histórico: Render → Kubernetes
 
-A versão 3 deste documento registrava Kubernetes como *evolução futura*, com o
-argumento de que não havia requisito de escala nem de alta disponibilidade. O
-argumento continua correto — o que mudou foi outra coisa: **Kubernetes virou
-requisito explícito da disciplina de DevOps**, junto com a exigência de nuvem
-como infraestrutura. Deixou de ser uma escolha técnica de escala e passou a ser
-entregável avaliado.
+A versão 3 deste documento tratava Kubernetes como evolução futura, porque não
+havia necessidade de escala nem de alta disponibilidade. Isso continua verdade. O
+que mudou foi que **Kubernetes virou exigência explícita da disciplina**, junto
+com usar a nuvem. Deixou de ser escolha técnica e virou entregável avaliado.
 
-O que a migração **não** exigiu mudar — e é a prova de que a arquitetura
-anterior era uma base sólida:
+O que **não** precisou mudar (prova de que a base era sólida):
 
 - os Dockerfiles;
-- as imagens no GHCR e a estratégia de tags imutáveis;
-- os workflows de CI e de validação de PR;
-- a separação QA/PROD, os Environments e a gestão de secrets;
+- as imagens no GHCR e as tags imutáveis;
+- os workflows de CI e a validação de PR;
+- a separação QA/PROD, os Environments e os secrets;
 - o ruleset, o CODEOWNERS e o fluxo de branches.
 
-O que mudou foi o **último passo** da esteira, exatamente como previsto:
+Mudou só o **último passo** da esteira:
 
 ```text
 antes:  build → GHCR → deploy hook (Render)
 agora:  build → GHCR → repository_dispatch → kustomize → SSH → kubectl apply
 ```
 
-Mudanças concretas registradas:
-
-| Item | Antes (v3) | Agora (v4) |
+| Item | Antes (v3) | Agora (v4 em diante) |
 |---|---|---|
-| Runtime | Render (image-backed) | k3s em EC2 t3.medium |
-| Gatilho de deploy | Deploy hook com `imgURL` | `repository_dispatch` + SSH |
+| Onde roda | Render | k3s em EC2 t3.medium |
+| Gatilho do deploy | Deploy hook com `imgURL` | `repository_dispatch` + SSH |
 | Tag imutável | `sha-a1b2c3d` | `<env>-a1b2c3d` |
 | Isolamento de ambiente | 2 serviços por app | 2 namespaces |
 | `reusable-render-deploy.yml` | Existia | **Removido** |
-| Manifestos | — | `kubernetes/` com Kustomize |
+| Manifestos | n/a | `kubernetes/` com Kustomize |
 
 ### O que ficou de fora, e por quê
 
-- **Argo CD / Flux.** O controlador consumiria memória do nó único que é
-  justamente o recurso escasso. O histórico de execução do Actions registra
-  tags e resultados de deploy sem exigir um controlador no cluster.
-- **Sealed Secrets.** `kubectl create secret` manual, uma vez por namespace.
-- **Cluster multi-nó.** Alta disponibilidade custaria cerca de 4x o orçamento
-  sem agregar ao que é avaliado. Nó único é ponto único de falha — decisão
-  consciente, registrada.
-- **EKS.** ~US$ 73/mês só de control plane, 146% do crédito disponível.
+- **Argo CD / Flux.** O controlador gastaria memória do nó único, que é o recurso
+  mais escasso. O histórico do Actions já registra tags e resultados.
+- **Sealed Secrets.** Usamos `kubectl create secret` à mão, uma vez por namespace.
+- **Cluster com vários nós.** Alta disponibilidade custaria ~4x o orçamento sem
+  ajudar no que é avaliado. Nó único é um ponto único de falha: decisão
+  consciente.
+- **EKS.** ~US$ 73/mês só de plano de controle, 146% do crédito.
 
 ---
 
 ## 25. Recomendações finais
 
-**Sequência de implantação.** (1) DevOps com os reusable workflows; (2) CI da
-API; (3) build/push da API + Dockerfile; (4) Compose; (5) EC2 + k3s + Elastic
-IP; (6) manifestos e deploy da API; (7) Chatbot; (8) Website + Vercel; (9)
-Mobile e Database. A API serve de piloto — os erros aparecem uma
-vez, não cinco.
+**Ordem de implantação.** (1) DevOps com os workflows reutilizáveis; (2) CI da
+API; (3) build e push da API + Dockerfile; (4) Compose; (5) EC2 + k3s + Elastic
+IP; (6) manifestos e deploy da API; (7) Chatbot; (8) Website + Vercel; (9) Mobile
+e Database. A API é o piloto: os erros aparecem uma vez, não cinco.
 
-**Ligue o ruleset depois que o CI rodar verde uma vez.** Ligar antes bloqueia
-todo mundo, e a primeira reação da equipe é pedir para desligar. Copie o nome
-exato do check da interface.
+**Ligue o ruleset só depois de o CI rodar verde uma vez.** Ligar antes bloqueia
+todo mundo, e a primeira reação é pedir para desligar. Copie o nome exato do
+check pela interface.
 
 **Exclua o `volta-landing-*` do ruleset** antes que o 1º ano trave num merge que
-eles não têm requisito de fazer via PR.
+eles não precisam fazer por PR.
 
 **Padronize os nomes dos jobs.** `build-test` e `validate-pr` em todos os
-repositórios — é o que permite um único ruleset de organização.
+repositórios permitem um único ruleset de organização.
 
-**Crie a tag `v1` no DevOps** antes de referenciar os reusable workflows nos
-outros repositórios, senão o `@v1` não resolve.
+**Crie a tag `v1` neste repositório** antes de usar os workflows reutilizáveis
+em outros, senão o `@v1` não resolve.
 
-**`concurrency` em tudo.** `cancel-in-progress: true` no CI, `false` no deploy.
+**Use `concurrency` em tudo.** `cancel-in-progress: true` no CI e `false` no
+deploy.
 
-**Health check é infraestrutura, não enfeite.** Sem `/actuator/health` e
-`/health` não há readiness probe, não há smoke test e o `kubectl rollout status`
+**Health check faz parte da infraestrutura.** Sem `/actuator/health` e `/health`
+não há verificação de saúde, nem smoke test, e o `kubectl rollout status`
 declara sucesso antes de a aplicação estar de pé.
 
 **Revise o que entra na imagem pública.** Rode `docker run --rm -it
-ghcr.io/app-volta/api:prod sh` uma vez e confira o que está lá dentro.
+ghcr.io/app-volta/api:prod sh` uma vez e veja o que há lá dentro.
 
-**Um `.env.example` completo em cada repositório.** É a documentação que as
-pessoas realmente leem.
+**Mantenha um `.env.example` completo em cada repositório.** É a documentação
+que as pessoas realmente leem.
 
-**Aloque o Elastic IP na primeira sessão do lab.** Sem ele, cada reinício da
-instância troca o IP público, o que quebra o SSH do deploy e todos os hostnames
-`sslip.io` do ingress de uma vez.
+**Crie o Elastic IP na primeira sessão do lab.** Sem ele, cada reinício troca o
+IP público, o que quebra o SSH do deploy e todos os endereços `sslip.io` de uma
+vez.
 
-**Confira o AWS Budget antes de qualquer coisa.** Alertas em US$ 10, US$ 25 e
-US$ 40. O vilão é instância esquecida ligada — o auto-stop por inatividade
-existe justamente para isso.
+**Confira o AWS Budget.** Alertas em US$ 10, US$ 25 e US$ 40. O maior risco é
+uma instância esquecida ligada, e o desligamento automático existe para isso.
 
-**Documente a decisão, não só a configuração.** Numa arguição individual,
-explicar por que o deploy fixa a tag `<env>-<sha>` em vez de usar a tag móvel —
-ou por que k3s em vez de EKS — vale muito mais do que recitar o YAML.
+**Documente a decisão, não só a configuração.** Numa arguição, explicar por que o
+deploy fixa a tag `<env>-<sha>` em vez da tag móvel, ou por que k3s em vez de EKS,
+vale mais do que recitar o YAML.
 
 ---
 
