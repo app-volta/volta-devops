@@ -42,6 +42,8 @@ Essa configuração ainda precisa ser publicada e validada no cluster. O chatbot
 
 O workflow manual `Deploy` tem a opção `qa-smoke`, restrita ao chatbot em QA. Ela escala temporariamente uma réplica, aguarda readiness, executa `GET /health` pelo HTTPS e sempre tenta restaurar `replicas=0`. Esse health check não substitui o teste de sessão e chat autenticados no app mobile.
 
+O tracing do chatbot em QA usa o projeto `volta-chatbot-qa`. A flag, o nome do projeto e o endpoint LangSmith ficam no ConfigMap `chatbot-config`; `LANGSMITH_API_KEY` permanece no Secret `chatbot-secrets` do cluster e nunca deve ser versionada. Recrie o pod após aplicar mudanças no ConfigMap ou no Secret para carregar as variáveis.
+
 ## Workflows reutilizáveis
 
 | Workflow | Função |
