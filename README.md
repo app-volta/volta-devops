@@ -51,6 +51,8 @@ O workflow manual `Deploy` tem a opção `qa-smoke`, restrita ao chatbot em QA. 
 | `ghcr-cleanup.yaml` | Limpeza mensal de versões sem tag |
 | `ec2-power.yaml` | Liga, desliga e inspeciona a EC2 do cluster (`workflow_dispatch`) |
 
+Em workflows YAML, coloque entre aspas valores de `description` que contenham `:` seguido de espaço; sem aspas, o arquivo pode falhar ao ser interpretado, antes mesmo de iniciar os jobs.
+
 Padrão de branch aceito: `^(feat|fix|refactor|chore|test|docs)/SCRUM-[0-9]{1,4}$`
 (prefixo Jira `SCRUM` em maiúsculas; exemplo: `feat/SCRUM-1858`).
 
