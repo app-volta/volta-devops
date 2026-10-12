@@ -139,10 +139,25 @@ certificado Let's Encrypt para os três endereços (API, ranking e chat). Para
 isso funcionar, as portas **80 e 443 precisam estar abertas**. O chatbot de QA
 fica em `https://chat.qa.<EIP>.sslip.io`.
 
-Para testar o chatbot de QA, use a opção `qa-smoke` do workflow **Deploy**
-(passo a passo em [`04-runbook-deploy.md`](04-runbook-deploy.md#testar-o-chatbot-em-qa-qa-smoke)).
+Para validar o chatbot pelo Ingress, use **Actions → Deploy → Run workflow**, selecione `chatbot`, `qa`, a tag QA e marque `qa-smoke`. O workflow escala uma réplica, aguarda readiness, valida `GET /health` com TLS e sempre tenta restaurar `replicas=0`, mesmo se o smoke falhar. Essa opção não executa sessão ou chat autenticados no app mobile; esses passos ainda exigem validação pelo cliente.
 
-Rollback: veja [`04-runbook-deploy.md`](04-runbook-deploy.md#voltar-uma-versão-rollback).
+O Deployment usa `/health/ready` na readiness probe, que retorna 503 quando PostgreSQL ou MongoDB estiver indisponível, e `/health/live` na liveness probe, que verifica somente o processo. Assim uma falha temporária de banco tira o pod do tráfego sem reiniciá-lo em loop.
+
+Para reimplantar uma versão antiga sem rebuild: **Actions → "Deploy" → Run
+workflow**, informando serviço, ambiente e a tag (`prod-a1b2c3d`).
+
+**Rollback de emergência** é script local, de propósito — quando algo caiu, você
+não quer depender do GitHub estar no ar nem esperar a pipeline:
+
+```bash
+./scripts/rollback.sh prod api                 # volta uma revisão
+./scripts/rollback.sh prod api prod-a1b2c3d    # volta para uma tag exata
+./scripts/rollback.sh prod api --history       # só lista as revisões
+```
+
+> Depois de um rollback pelo script, registre a tag aplicada em uma execução do
+> workflow Deploy quando o serviço estiver recuperado. O script imprime os
+> valores necessários no fim.
 
 ---
 

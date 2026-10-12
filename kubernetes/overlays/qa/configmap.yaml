@@ -31,3 +31,6 @@ data:
   ENVIRONMENT: "qa"
   PORT: "8000"
   LOG_LEVEL: "DEBUG"
+  VOLTA_LANGSMITH_ENABLED: "true"
+  LANGSMITH_PROJECT: "volta-chatbot-qa"
+  LANGSMITH_ENDPOINT: "https://api.smith.langchain.com"

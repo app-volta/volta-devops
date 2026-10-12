@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       image-name:
-        description: Nome da imagem no GHCR (ex.: api, chatbot)
+        description: "Nome da imagem no GHCR (ex.: api, chatbot)"
         required: true
         type: string
       environment:
@@ -45,7 +45,7 @@ on:
         description: Nome completo da imagem (sem tag)
         value: ${{ jobs.docker.outputs.image }}
       image-tag:
-        description: Tag imutável gerada (ex.: qa-a1b2c3d)
+        description: Tag imutável gerada (ex.- qa-a1b2c3d)
         value: ${{ jobs.docker.outputs.image-tag }}
 
 jobs:
