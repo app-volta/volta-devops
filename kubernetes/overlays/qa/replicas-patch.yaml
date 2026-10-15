@@ -5,7 +5,8 @@
 # demanda com:
 #   kubectl -n volta-qa scale deployment/api --replicas=1
 #
-# O alvo (todos os Deployments) é declarado em kustomization.yaml.
+# O alvo (api, api-redis e chatbot) é declarado em kustomization.yaml. O redis
+# fica sempre com 1 réplica: consome ~64 Mi e evita esquecê-lo ao ligar a api-redis.
 - op: replace
   path: /spec/replicas
   value: 0

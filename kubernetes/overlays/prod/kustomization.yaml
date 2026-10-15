@@ -24,10 +24,12 @@ images:
     newTag: prod
 
 patches:
-  # Mais recursos que a base (aplica-se a api e chatbot)
+  # Mais recursos que a base (aplica-se a api, api-redis e chatbot; o redis
+  # mantém o limite pequeno da base)
   - path: resources-patch.yaml
     target:
       kind: Deployment
+      name: "^(api|api-redis|chatbot)$"
 
   # Hosts de produção (sem o segmento .qa). SUBSTITUA 0.0.0.0 PELO ELASTIC IP.
   - target:

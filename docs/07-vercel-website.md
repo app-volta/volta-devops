@@ -1,44 +1,76 @@
-# Vercel — Website
+# Vercel: Website
 
-O Website (`volta-website-dad`) é conteinerizado apenas para o Compose local;
-em produção **não roda no cluster** (ver [`01-arquitetura-cicd.md`, seção 2.3](01-arquitetura-cicd.md#23-website-na-vercel-sem-docker-em-produção)).
-O deploy é feito pela **integração nativa Vercel↔GitHub**, direto no
-repositório do Website — este doc registra como esse projeto está
-provisionado na Vercel, já que a configuração em si não mora neste
-repositório.
+O Website (`volta-website-dad`) **não roda no cluster**. Ele é publicado pela
+Vercel, que se conecta direto ao repositório do Website no GitHub. Por isso, a
+configuração fica no painel da Vercel e não neste repositório. Este documento
+registra como ela foi feita.
 
-## Provisionamento
+O motivo da escolha está em
+[`01-arquitetura-cicd.md`, seção 2.3](01-arquitetura-cicd.md#23-website-na-vercel-sem-docker-em-produção).
+O Dockerfile do Website existe só para o Docker Compose local.
 
-Projeto importado direto do repositório GitHub do Website via GitHub App da
-Vercel. Stack: React + TypeScript com Vite.
+## Como o deploy funciona
+
+| Evento | Resultado |
+|---|---|
+| Abrir um PR | A Vercel gera um *preview* só daquele PR |
+| Merge em `develop` | Preview estável, que usa a API de **QA** |
+| Merge em `main` | **Produção**, que usa a API de produção |
+
+Como o GitHub bloqueia o merge quando o CI falha, nada chega a `main` sem passar
+pelos testes.
+
+## Configuração do projeto
+
+O projeto foi importado do GitHub pelo app da Vercel. Stack: React + TypeScript
+com Vite.
 
 | Campo | Valor |
 |---|---|
-| Framework detectado | Vite |
-| Install Command | `npm ci` (repo tem `package-lock.json`) |
-| Build Command | `npm run build` → `tsc -b && vite build` |
+| Framework | Vite |
+| Install Command | `npm ci` |
+| Build Command | `npm run build` (executa `tsc -b && vite build`) |
 | Output Directory | `dist` |
-| Branches | `main` → Production · demais branches/PRs → Preview |
+| Production Branch | `main` |
+| Outras branches e PRs | Preview |
 
 ## Variáveis de ambiente
 
-Por ser Vite, só variáveis com prefixo `VITE_` são embutidas no bundle (ex.:
-`import.meta.env.VITE_API_URL`). Os hosts do backend seguem o padrão definido
-no dispatch de deploy
-([`.github/workflows/dispatch-deploy.yaml`](../.github/workflows/dispatch-deploy.yaml)),
-baseado no IP do cluster (`vars.SSH_HOST`) e no ambiente:
+No Vite, só variáveis que começam com `VITE_` chegam ao navegador (por exemplo
+`import.meta.env.VITE_API_URL`). Elas são **gravadas no código no momento do
+build**.
 
-| Ambiente Vercel | API | Ranking (api-redis) | Chatbot |
+> **Nunca coloque segredo em uma variável `VITE_*`.** Qualquer pessoa consegue
+> ler o valor no JavaScript do site.
+
+Os endereços do backend seguem o padrão usado pelo
+[`dispatch-deploy.yaml`](../.github/workflows/dispatch-deploy.yaml), baseado no
+Elastic IP do cluster (`SSH_HOST`):
+
+| Ambiente na Vercel | API | Ranking | Chatbot |
 |---|---|---|---|
 | Preview (QA) | `https://api.qa.<SSH_HOST>.sslip.io` | `https://ranking.qa.<SSH_HOST>.sslip.io` | `https://chat.qa.<SSH_HOST>.sslip.io` |
 | Production | `http://api.<SSH_HOST>.sslip.io` | `http://ranking.<SSH_HOST>.sslip.io` | `http://chat.<SSH_HOST>.sslip.io` |
 
-Cadastradas em *Settings → Environment Variables* no projeto Vercel, com o
-nome exato que o código do Website usa (`VITE_API_URL` e equivalentes).
+Cadastre em **Settings → Environment Variables**, com o nome que o código do
+Website usa (`VITE_API_URL` e equivalentes).
 
-## Por que não um workflow reutilizável aqui
+> **Se o Elastic IP mudar** (por exemplo, ao recriar o cluster do zero), atualize
+> essas variáveis na Vercel e faça um novo deploy. Como o valor é gravado no
+> build, só mudar a variável não basta.
 
-Diferente de API/Chatbot (que dependem de build de imagem Docker e deploy via
-SSH no k3s), o Website não precisa de nenhum passo de CI neste repositório: a
-Vercel builda, testa preview por PR e publica em produção sozinha ao detectar
-push.
+## Voltar uma versão
+
+A Vercel guarda todos os deployments. No painel, abra o deployment antigo e
+escolha **Promote to Production**.
+
+## Por que não há workflow aqui
+
+API e Chatbot precisam gerar imagem Docker e fazer deploy por SSH. O Website
+não: a Vercel compila, publica e gera os previews sozinha. A verificação de
+qualidade (lint, tipos, build) fica no CI do repositório do Website.
+
+## Limite do plano
+
+O plano Hobby da Vercel é para uso não comercial. Um projeto acadêmico se
+enquadra.
