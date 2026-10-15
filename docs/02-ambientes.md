@@ -62,6 +62,7 @@ kubernetes/
 │   ├── api/
 │   ├── api-redis/
 │   ├── chatbot/
+│   ├── redis/            # Redis de apoio da api-redis (sempre 1 réplica)
 │   └── ingress.yaml
 └── overlays/             # só o que muda em cada ambiente
     ├── qa/               # réplicas=0, HTTPS, logs DEBUG
@@ -80,6 +81,7 @@ a máquina tem só 4 GB. Para testar:
 ```bash
 # dentro da EC2, via SSH
 kubectl -n volta-qa scale deployment/api --replicas=1
+kubectl -n volta-qa scale deployment/api-redis --replicas=1
 kubectl -n volta-qa scale deployment/chatbot --replicas=1
 ```
 
@@ -87,10 +89,15 @@ Quando terminar, volte para zero:
 
 ```bash
 kubectl -n volta-qa scale deployment/api --replicas=0
+kubectl -n volta-qa scale deployment/api-redis --replicas=0
 kubectl -n volta-qa scale deployment/chatbot --replicas=0
 ```
 
-> O deploy seguinte reaplica `replicas=0` em QA. Isso é intencional.
+> O deploy seguinte reaplica `replicas=0` em QA. Isso é intencional. O `redis`
+> fica sempre ligado (~64 Mi), para não ser esquecido ao subir a `api-redis`.
+>
+> Para conferir o consumo real de memória antes de ligar mais serviços:
+> `kubectl top pods -A` (a t3.medium tem 4 GB para QA, produção e k3s).
 
 Para testar só o chatbot em QA pelo HTTPS, existe o atalho `qa-smoke` no
 workflow **Deploy**. Veja [`04-runbook-deploy.md`](04-runbook-deploy.md).

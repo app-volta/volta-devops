@@ -35,6 +35,7 @@ patches:
 - path: replicas-patch.yaml
   target:
     kind: Deployment
+    name: "^(api|api-redis|chatbot)$"
 - patch: |-
     - op: replace
       path: /spec/rules/0/host

@@ -177,8 +177,10 @@ antes de uma demonstração, assim como a EC2.
 **MongoDB (Chatbot):** Atlas M0 (gratuito, 512 MB), com dois bancos lógicos,
 `volta_qa` e `volta_prod`.
 
-**Redis e Neo4j:** hospedagem ainda a definir. A ideia é a mesma: serviço
-gerenciado fora do servidor.
+**Redis:** roda dentro do cluster (`redis:7-alpine`, ~64 Mi, sem volume), porque
+guarda só índices derivados do Postgres (ranking e busca geográfica de
+cooperativas) e a `api-redis` os recria se ele reiniciar. Só a `api-redis`
+alcança o Redis, por NetworkPolicy. **Neo4j:** hospedagem ainda a definir.
 
 ### 2.5 Imagens do GHCR públicas
 
@@ -432,8 +434,8 @@ commit, autor e horário.
 ### Nomes
 
 ```text
-namespace volta-qa      Services: api, api-redis, chatbot
-namespace volta-prod    Services: api, api-redis, chatbot
+namespace volta-qa      Services: api, api-redis, chatbot, redis
+namespace volta-prod    Services: api, api-redis, chatbot, redis
 ```
 
 O nome do Service é o mesmo nos dois namespaces. Quem diferencia é o namespace.
@@ -871,13 +873,15 @@ Arquivo: `docker-compose/docker-compose.yaml`. Guia de uso:
 |---|---|---|
 | `postgres` | Sim | Banco local |
 | `mongo` | Sim | Necessário ao Chatbot |
+| `redis` | Sim | Necessário à api-redis |
 | `api` | Sim | Quem trabalha no Mobile precisa da API sem instalar Java |
+| `api-redis` | Sim | Ranking e busca de cooperativas |
 | `chatbot` | Sim, com `ENVIRONMENT: qa` | Idem |
 | Website | Não | `npm run dev` é mais rápido e tem hot reload |
 | Mobile | Não | Android precisa de SDK e emulador |
 | Proxy reverso | Não | Traefik (no cluster) e Vercel já cuidam disso |
 
-Os repositórios devem ficar **lado a lado** (`volta-api`, `volta-chatbot`,
+Os repositórios devem ficar **lado a lado** (`volta-api`, `volta-api-redis`, `volta-chatbot`,
 `volta-devops`), porque o Compose usa caminhos relativos como
 `../../volta-api`.
 
@@ -982,8 +986,8 @@ perde é alta disponibilidade, que não é requisito aqui.
 ```text
 EC2 t3.medium (Amazon Linux 2023) + Elastic IP
 └── k3s (um nó, com Traefik embutido)
-    ├── namespace volta-qa     → api, api-redis, chatbot  (replicas: 0 por padrão)
-    └── namespace volta-prod   → api, api-redis, chatbot
+    ├── namespace volta-qa     → api, api-redis, chatbot  (replicas: 0 por padrão; redis sempre 1)
+    └── namespace volta-prod   → api, api-redis, chatbot, redis
 ```
 
 Sem load balancer e sem NAT Gateway, os dois maiores gastos de crédito numa conta
@@ -1010,6 +1014,7 @@ kubernetes/
 ├── base/
 │   ├── api/{deployment,service,kustomization}.yaml
 │   ├── api-redis/{deployment,service,kustomization}.yaml
+│   ├── redis/{deployment,service,networkpolicy,kustomization}.yaml
 │   ├── chatbot/{deployment,service,kustomization}.yaml
 │   ├── ingress.yaml
 │   └── kustomization.yaml

@@ -9,7 +9,9 @@ Postgres ou MongoDB.
 |---|---|---|
 | `postgres` | 5432 | Banco relacional (PostgreSQL 16) |
 | `mongo` | 27017 | Memória das conversas do chatbot (MongoDB 7) |
+| `redis` | 6379 | Cache do ranking e do índice de cooperativas (Redis 7) |
 | `api` | 8080 | API principal (Spring Boot) |
+| `api-redis` | 8081 | API de ranking e busca de cooperativas por proximidade (Spring Boot + Redis) |
 | `chatbot` | 8000 | Chatbot (FastAPI), com `ENVIRONMENT=qa` |
 
 O Website e o Mobile **não** estão aqui. Rode o Website com `npm run dev` e o
@@ -24,6 +26,7 @@ Mobile pelo Android Studio.
    ```text
    volta/
    ├── volta-api/
+   ├── volta-api-redis/
    ├── volta-chatbot/
    └── volta-devops/     ← rode os comandos daqui
    ```
@@ -36,7 +39,8 @@ Mobile pelo Android Studio.
    ```
 
    Os campos mais importantes: `JWT_KEY`, `JWT_EXPIRATION`, `GEMINI_API_KEY` e
-   `GROQ_API_KEY`. O arquivo `.env` **nunca** deve ser commitado.
+   `GROQ_API_KEY`. O `JWT_KEY` é compartilhado pela `api`, pela `api-redis` e
+   pelo `chatbot`: use o mesmo valor, ou o token de uma não vale nas outras. O arquivo `.env` **nunca** deve ser commitado.
 
 ## Comandos
 
@@ -58,6 +62,7 @@ docker compose up -d postgres mongo
 
 ```bash
 curl http://localhost:8080/actuator/health   # API
+curl http://localhost:8081/actuator/health   # API Redis
 curl http://localhost:8000/health            # Chatbot
 ```
 
@@ -67,7 +72,7 @@ curl http://localhost:8000/health            # Chatbot
 |---|---|
 | `path ../../volta-api not found` | Os repositórios não estão lado a lado (veja acima) |
 | API demora a ficar saudável | Normal: pode levar até 1 minuto no primeiro start |
-| Porta já em uso | Pare o que estiver usando 5432, 8080, 8000 ou 27017 |
+| Porta já em uso | Pare o que estiver usando 5432, 6379, 8080, 8081, 8000 ou 27017 |
 | Quero recomeçar do zero | `docker compose down -v` e suba de novo |
 
 As senhas locais (`volta_local`) servem só para desenvolvimento. Não as use em

@@ -31,7 +31,7 @@ para o repositório inteiro, já que existe um cluster só.
 > As três credenciais AWS **expiram a cada 4 horas**. Veja como renová-las em
 > [`04-runbook-deploy.md`](04-runbook-deploy.md#renovar-a-sessão-do-learner-lab).
 
-## No GitHub (repositórios de aplicação: API, Chatbot...)
+## No GitHub (repositórios de aplicação: API, API Redis, Chatbot...)
 
 | Nome | Tipo | Para quê |
 |---|---|---|
@@ -56,16 +56,40 @@ Eles são criados **à mão, uma vez por namespace**. Exemplo:
 ```bash
 # dentro da EC2, via SSH
 kubectl -n volta-qa create secret generic api-secrets \
-  --from-literal=JWT_KEY='valor-de-qa' \
-  --from-literal=SPRING_DATASOURCE_PASSWORD='senha-do-neon-qa'
+  --from-literal=DATABASE_HOST='ep-xxxx.sa-east-1.aws.neon.tech' \
+  --from-literal=DATABASE_NAME='nome-do-banco-qa' \
+  --from-literal=DATABASE_USERNAME='usuario-do-neon-qa' \
+  --from-literal=DATABASE_PASSWORD='senha-do-neon-qa' \
+  --from-literal=JWT_KEY='valor-de-qa-com-mais-de-32-bytes' \
+  --from-literal=JWT_EXPIRATION='3600000'
 ```
+
+### O que cada Secret precisa ter
+
+Os nomes abaixo são os que cada aplicação lê (conferidos nos repositórios).
+
+| Secret | Obrigatórias | Opcionais |
+|---|---|---|
+| `api-secrets` | `DATABASE_HOST`, `DATABASE_NAME`, `DATABASE_USERNAME`, `DATABASE_PASSWORD`, `JWT_KEY`, `JWT_EXPIRATION` | `DATABASE_POOL_SIZE` (padrão 5), `SERVER_PORT` (padrão 8080), `SWAGGER_USERNAME`, `SWAGGER_PASSWORD`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_COMPANY_ID` |
+| `api-redis-secrets` | `JWT_KEY` | `JWT_EXPIRATION` |
+| `chatbot-secrets` | `POSTGRES_DSN`, `MONGO_URI`, `JWT_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY` | `CORS_ORIGINS`, `QDRANT_URL`, `QDRANT_API_KEY`, `INGESTION_API_KEY`, `COOPERATIVE_A2A_BASE_URL`, `COOPERATIVE_A2A_HMAC_SECRET`, `LANGSMITH_API_KEY` |
+
+O `REDIS_HOST` e o `REDIS_PORT` da `api-redis` **não são secretos**: vêm do
+ConfigMap `api-redis-config` (`redis:6379`, o Service do Redis do cluster).
+
 
 Dicas importantes:
 
 - Use **valores diferentes** em QA e produção. Principalmente a chave do JWT: assim
   um token emitido em QA não vale em produção.
-- Os nomes das chaves (`JWT_KEY` etc.) precisam ser os que a aplicação lê. Para
-  o Chatbot, use o `docker-compose/.env.example` como lista de referência.
+- O `JWT_KEY` precisa ser **igual na `api`, na `api-redis` e no `chatbot`
+  dentro do mesmo ambiente** (a `api` emite o token, as outras o validam) e
+  **diferente entre QA e produção**.
+- Os nomes das chaves precisam ser os que a aplicação lê (tabela acima).
+- Sem `QDRANT_URL`, o chatbot só consegue usar um índice FAISS, e o índice não
+  vai na imagem (`data/faiss` está no `.dockerignore`). Para o RAG funcionar em
+  QA/produção, publique os documentos num Qdrant (`scripts/ingest_rag.py`, no
+  repositório do chatbot) e informe `QDRANT_URL` e `QDRANT_API_KEY`.
 - Se recriar o cluster do zero, **os secrets somem** e precisam ser criados de
   novo.
 - Para ver quais chaves existem (sem mostrar os valores):

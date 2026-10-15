@@ -34,27 +34,14 @@ Código → CI → imagem no GHCR (<ambiente>-<sha>) → aviso ao DevOps
 | Imagens Docker | GHCR, públicas |
 | Entrada de tráfego | Traefik (já vem no k3s) + `sslip.io` |
 | Banco relacional | Postgres no Neon, com uma branch por ambiente |
-| Banco de documentos | MongoDB Atlas |
+| Banco de documentos | MongoDB Atlas (memória das conversas do chatbot) |
+| Cache / ranking | Redis dentro do cluster (usado pela `api-redis`) |
 | Fotos | S3, com URL assinada pela API |
 | Website | Vercel |
 
 ## Por onde começar
 
-<<<<<<< HEAD
 | Quero... | Leia |
-=======
-O overlay de QA está sendo preparado para servir `api`, `ranking` e `chat` em `https://<serviço>.qa.<EIP>.sslip.io`, com TLS terminado no Traefik e certificados Let's Encrypt geridos pelo cert-manager. O deploy instala o cert-manager, aplica o ClusterIssuer e valida o certificado e o health check HTTPS quando o Deployment tem réplicas ativas. `SSH_HOST` precisa estar definido nas variáveis do repositório.
-
-Essa configuração ainda precisa ser publicada e validada no cluster. O chatbot de QA permanece em `replicas=0` por padrão; para validar o app via HTTPS será necessário escalar temporariamente uma réplica, testar sessão e chat autenticados pelo cliente mobile e depois voltar a zero. Passos e diagnóstico: [`docs/06-cluster-k3s.md`](docs/06-cluster-k3s.md).
-
-O workflow manual `Deploy` tem a opção `qa-smoke`, restrita ao chatbot em QA. Ela escala temporariamente uma réplica, aguarda readiness, executa `GET /health` pelo HTTPS e sempre tenta restaurar `replicas=0`. Esse health check não substitui o teste de sessão e chat autenticados no app mobile.
-
-O tracing do chatbot em QA usa o projeto `volta-chatbot-qa`. A flag, o nome do projeto e o endpoint LangSmith ficam no ConfigMap `chatbot-config`; `LANGSMITH_API_KEY` permanece no Secret `chatbot-secrets` do cluster e nunca deve ser versionada. Recrie o pod após aplicar mudanças no ConfigMap ou no Secret para carregar as variáveis.
-
-## Workflows reutilizáveis
-
-| Workflow | Função |
->>>>>>> 6ca3ffa5b202e4ed5e8baa68545d7434e85833b3
 |---|---|
 | Entender a arquitetura e as decisões | [`docs/01-arquitetura-cicd.md`](docs/01-arquitetura-cicd.md) |
 | Saber o que muda entre QA e produção | [`docs/02-ambientes.md`](docs/02-ambientes.md) |
@@ -65,14 +52,7 @@ O tracing do chatbot em QA usa o projeto `volta-chatbot-qa`. A flag, o nome do p
 | Configurar o Website na Vercel | [`docs/07-vercel-website.md`](docs/07-vercel-website.md) |
 | Rodar o backend na minha máquina | [`docker-compose/README.md`](docker-compose/README.md) |
 
-<<<<<<< HEAD
 ## Esteiras (workflows)
-=======
-Em workflows YAML, coloque entre aspas valores de `description` que contenham `:` seguido de espaço; sem aspas, o arquivo pode falhar ao ser interpretado, antes mesmo de iniciar os jobs.
-
-Padrão de branch aceito: `^(feat|fix|refactor|chore|test|docs)/SCRUM-[0-9]{1,4}$`
-(prefixo Jira `SCRUM` em maiúsculas; exemplo: `feat/SCRUM-1858`).
->>>>>>> 6ca3ffa5b202e4ed5e8baa68545d7434e85833b3
 
 | Workflow | O que faz |
 |---|---|
@@ -86,6 +66,10 @@ Padrão de branch aceito: `^(feat|fix|refactor|chore|test|docs)/SCRUM-[0-9]{1,4}
 Nome de branch aceito: `^(feat|fix|refactor|chore|test|docs)/SCRUM-[0-9]{1,4}$`
 (exemplo: `feat/SCRUM-1858`). Detalhes em
 [`docs/05-padroes-git.md`](docs/05-padroes-git.md).
+
+Em workflows YAML, coloque entre aspas os valores de `description` que contêm
+`:` seguido de espaço; sem aspas, o arquivo pode falhar ao ser interpretado
+antes mesmo de os jobs iniciarem.
 
 ### Usar a pipeline em outro repositório
 
@@ -154,3 +138,8 @@ opção `qa-smoke` do workflow **Deploy**: ela liga uma réplica, testa
 `GET /health` e volta para zero. Esse teste não substitui a validação de sessão
 e chat pelo app mobile. Detalhes em
 [`docs/04-runbook-deploy.md`](docs/04-runbook-deploy.md#testar-o-chatbot-em-qa-qa-smoke).
+
+O tracing do chatbot em QA usa o projeto LangSmith `volta-chatbot-qa`. A flag, o
+nome do projeto e o endpoint ficam no ConfigMap `chatbot-config`;
+`LANGSMITH_API_KEY` fica no Secret `chatbot-secrets` e nunca deve ser
+versionada. Recrie o pod depois de mudar o ConfigMap ou o Secret.x

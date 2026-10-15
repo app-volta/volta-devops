@@ -24,6 +24,12 @@ spec:
                 name: chatbot-config
             - secretRef:
                 name: chatbot-secrets
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
           resources:
             requests:
               cpu: "250m"
@@ -31,15 +37,20 @@ spec:
             limits:
               cpu: "500m"
               memory: "1Gi"
+          # Dá tempo de a aplicação subir sem que a liveness a reinicie.
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: 8000
+            periodSeconds: 5
+            failureThreshold: 36
           readinessProbe:
             httpGet:
               path: /health/ready
               port: 8000
-            initialDelaySeconds: 15
             periodSeconds: 10
           livenessProbe:
             httpGet:
               path: /health/live
               port: 8000
-            initialDelaySeconds: 30
             periodSeconds: 20
