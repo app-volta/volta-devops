@@ -37,7 +37,6 @@ spec:
             limits:
               cpu: "500m"
               memory: "512Mi"
-          # Dá tempo de a aplicação subir sem que a liveness a reinicie.
           startupProbe:
             httpGet:
               path: /actuator/health/readiness

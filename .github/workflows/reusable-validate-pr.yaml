@@ -17,7 +17,6 @@ jobs:
         env:
           HEAD_REF: ${{ github.head_ref }}
         run: |
-          # develop é a branch de integração e não segue o padrão de feature
           if [[ "$HEAD_REF" == "develop" ]]; then
             echo "Branch de integração: $HEAD_REF"
             exit 0
@@ -35,20 +34,17 @@ jobs:
           HEAD_REF: ${{ github.head_ref }}
           BASE_REF: ${{ github.base_ref }}
         run: |
-          # Caso 1: hotfix criado a partir de main pode voltar direto para main
           if [[ "$HEAD_REF" == fix/* && "$BASE_REF" == "main" ]]; then
             echo "Hotfix permitido: $HEAD_REF -> $BASE_REF"
             exit 0
           fi
 
-          # Caso 2: qualquer branch de feature só pode mirar develop
           if [[ "$HEAD_REF" =~ ^(feat|fix|refactor|chore|test|docs)/ && "$BASE_REF" != "develop" ]]; then
             echo "::error::Branches de feature só podem abrir PR para 'develop'."
             echo "::error::Recebido: $HEAD_REF -> $BASE_REF"
             exit 1
           fi
 
-          # Caso 3: develop só pode ser promovida para main
           if [[ "$HEAD_REF" == "develop" && "$BASE_REF" != "main" ]]; then
             echo "::error::'develop' só pode abrir PR para 'main'."
             echo "::error::Recebido: $HEAD_REF -> $BASE_REF"

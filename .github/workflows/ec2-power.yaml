@@ -1,14 +1,5 @@
 name: Ligar e desligar o cluster
 
-# Sobe a EC2 do k3s sob demanda, sem precisar de AWS CLI na máquina de quem pede.
-#
-# ATENÇÃO — credenciais do AWS Academy Learner Lab expiram a cada 4 horas.
-# Este workflow depende dos secrets AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY e
-# AWS_SESSION_TOKEN, que precisam ser recolados a cada sessão do lab (em
-# "AWS Details" -> "AWS CLI"). Não há alternativa: o lab não permite criar
-# roles IAM, o que inviabiliza OIDC. Quando expirarem, este workflow falha com
-# erro de credencial — basta recolar os três secrets e rodar de novo.
-
 on:
   workflow_dispatch:
     inputs:

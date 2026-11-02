@@ -53,7 +53,7 @@ services:
 
   api:
     build:
-      context: ../../volta-api
+      context: ../../volta-api-core
     container_name: volta-api
     restart: unless-stopped
     environment:

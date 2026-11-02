@@ -1,6 +1,6 @@
 # Cluster k3s: criar e operar
 
-> Complementa a seção 17 de [`01-arquitetura-cicd.md`](01-arquitetura-cicd.md),
+> Complementa a seção 7 de [`01-arquitetura-cicd.md`](01-arquitetura-cicd.md),
 > que explica **por que** a arquitetura é assim. Aqui está **como operar**.
 > Para deploy e rollback, veja também [`04-runbook-deploy.md`](04-runbook-deploy.md).
 
@@ -9,8 +9,8 @@
 ```text
 EC2 t3.medium (Amazon Linux 2023, disco de 30 GB) + Elastic IP (IP fixo)
 └── k3s (Kubernetes leve, com Traefik embutido)
-    ├── namespace volta-qa
-    └── namespace volta-prod
+    ├── namespace volta-qa    (api, api-redis, chatbot)
+    └── namespace volta-prod  (api, api-redis, chatbot)
 
 Firewall (security group): portas 22 (SSH), 80 e 443 (Traefik)
 CloudWatch: desliga a máquina após ~15 min sem tráfego de rede
@@ -168,7 +168,7 @@ não quer depender do GitHub estar no ar nem esperar a pipeline:
 | EC2 t3.medium | Só ligada | ~US$ 0,0416/h |
 | Disco (30 GB) | **Sempre** | ~US$ 2,40/mês |
 | Elastic IP | **Sempre** | ~US$ 3,60/mês |
-| S3 (fotos) + transferência | Por uso | ~US$ 1/mês |
+| Fotos (Cloudinary) | Fora da AWS | Plano gratuito |
 
 | Uso | Custo/mês | Cabe nos US$ 50 de crédito? |
 |---|---|---|

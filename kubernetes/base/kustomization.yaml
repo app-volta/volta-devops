@@ -3,6 +3,5 @@ kind: Kustomization
 resources:
   - api
   - api-redis
-  - redis
   - chatbot
   - ingress.yaml

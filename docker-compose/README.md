@@ -25,7 +25,7 @@ Mobile pelo Android Studio.
 
    ```text
    volta/
-   ├── volta-api/
+   ├── volta-api-core/
    ├── volta-api-redis/
    ├── volta-chatbot/
    └── volta-devops/     ← rode os comandos daqui
@@ -70,7 +70,7 @@ curl http://localhost:8000/health            # Chatbot
 
 | Sintoma | O que fazer |
 |---|---|
-| `path ../../volta-api not found` | Os repositórios não estão lado a lado (veja acima) |
+| `path ../../volta-api-core not found` | Os repositórios não estão lado a lado (veja acima) |
 | API demora a ficar saudável | Normal: pode levar até 1 minuto no primeiro start |
 | Porta já em uso | Pare o que estiver usando 5432, 6379, 8080, 8081, 8000 ou 27017 |
 | Quero recomeçar do zero | `docker compose down -v` e suba de novo |

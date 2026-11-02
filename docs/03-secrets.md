@@ -70,13 +70,12 @@ Os nomes abaixo são os que cada aplicação lê (conferidos nos repositórios).
 
 | Secret | Obrigatórias | Opcionais |
 |---|---|---|
-| `api-secrets` | `DATABASE_HOST`, `DATABASE_NAME`, `DATABASE_USERNAME`, `DATABASE_PASSWORD`, `JWT_KEY`, `JWT_EXPIRATION` | `DATABASE_POOL_SIZE` (padrão 5), `SERVER_PORT` (padrão 8080), `SWAGGER_USERNAME`, `SWAGGER_PASSWORD`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_COMPANY_ID` |
-| `api-redis-secrets` | `JWT_KEY` | `JWT_EXPIRATION` |
+| `api-secrets` | `DATABASE_HOST`, `DATABASE_NAME`, `DATABASE_USERNAME`, `DATABASE_PASSWORD`, `JWT_KEY`, `JWT_EXPIRATION` | `DATABASE_POOL_SIZE` (padrão 5), `SERVER_PORT` (padrão 8080), `SWAGGER_USERNAME`, `SWAGGER_PASSWORD`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_COMPANY_ID`, `MAIL_HOST`, `MAIL_PORT`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `MAIL_FROM` (recuperação de senha; sem eles nenhum e-mail é enviado) |
+| `api-redis-secrets` | `JWT_KEY`, `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` | `JWT_EXPIRATION`, `REDIS_USERNAME` (`default` no Redis Cloud), `SPRING_DATA_REDIS_SSL_ENABLED` (`true` se o endpoint exigir TLS) |
 | `chatbot-secrets` | `POSTGRES_DSN`, `MONGO_URI`, `JWT_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY` | `CORS_ORIGINS`, `QDRANT_URL`, `QDRANT_API_KEY`, `INGESTION_API_KEY`, `COOPERATIVE_A2A_BASE_URL`, `COOPERATIVE_A2A_HMAC_SECRET`, `LANGSMITH_API_KEY` |
 
-O `REDIS_HOST` e o `REDIS_PORT` da `api-redis` **não são secretos**: vêm do
-ConfigMap `api-redis-config` (`redis:6379`, o Service do Redis do cluster).
-
+O Redis é o **Redis Cloud**, não roda no cluster. Use um banco (ou credencial)
+diferente em QA e produção.
 
 Dicas importantes:
 
@@ -106,11 +105,19 @@ está dentro dela. Então:
 
 ## Credenciais AWS
 
-Nenhuma credencial AWS é guardada para a **aplicação**. Quando a API precisa do
-S3, a EC2 recebe credenciais temporárias sozinha (pelo `LabInstanceProfile`).
+Nenhuma credencial AWS é guardada para a **aplicação**: as aplicações não usam
+serviços da AWS (as fotos vão para o Cloudinary).
 
 As credenciais guardadas no GitHub (`AWS_*`) servem apenas para ligar e desligar
 a instância, e expiram junto com a sessão do lab.
+
+## Cloudinary e Firebase
+
+O Website e o Mobile enviam as fotos direto ao Cloudinary, por um *upload
+preset* sem assinatura. Por isso o `cloud_name` e o nome do preset não são
+segredos e não há chave no cluster. **Nunca** coloque `api_secret` do Cloudinary
+em `VITE_*` ou no app. O `google-services.json` do Firebase também fica só no
+Mobile.
 
 ## Variáveis do Website (Vercel)
 
