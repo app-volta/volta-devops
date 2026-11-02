@@ -6,7 +6,7 @@ configuração fica no painel da Vercel e não neste repositório. Este document
 registra como ela foi feita.
 
 O motivo da escolha está em
-[`01-arquitetura-cicd.md`, seção 2.3](01-arquitetura-cicd.md#23-website-na-vercel-sem-docker-em-produção).
+[`01-arquitetura-cicd.md`, seção 8](01-arquitetura-cicd.md#8-website-na-vercel).
 O Dockerfile do Website existe só para o Docker Compose local.
 
 ## Como o deploy funciona
@@ -36,28 +36,45 @@ com Vite.
 
 ## Variáveis de ambiente
 
-No Vite, só variáveis que começam com `VITE_` chegam ao navegador (por exemplo
-`import.meta.env.VITE_API_URL`). Elas são **gravadas no código no momento do
-build**.
+No Vite, só variáveis que começam com `VITE_` chegam ao navegador. Elas são
+**gravadas no código no momento do build**.
 
 > **Nunca coloque segredo em uma variável `VITE_*`.** Qualquer pessoa consegue
 > ler o valor no JavaScript do site.
 
-Os endereços do backend seguem o padrão usado pelo
-[`dispatch-deploy.yaml`](../.github/workflows/dispatch-deploy.yaml), baseado no
-Elastic IP do cluster (`SSH_HOST`):
+Os valores de produção vêm do `.env.production` do repositório do Website; o
+`.env.example` documenta todas as variáveis.
 
-| Ambiente na Vercel | API | Ranking | Chatbot |
-|---|---|---|---|
-| Preview (QA) | `https://api.qa.<SSH_HOST>.sslip.io` | `https://ranking.qa.<SSH_HOST>.sslip.io` | `https://chat.qa.<SSH_HOST>.sslip.io` |
-| Production | `http://api.<SSH_HOST>.sslip.io` | `http://ranking.<SSH_HOST>.sslip.io` | `http://chat.<SSH_HOST>.sslip.io` |
+| Variável | Valor | Para quê |
+|---|---|---|
+| `VITE_API_BASE_URL` | `/api` | API principal |
+| `VITE_CHAT_API_BASE_URL` | `/chat-api` | Chatbot |
+| `VITE_RANKING_API_BASE_URL` | `/ranking-api` | Ranking (`api-redis`) |
+| `VITE_USAR_MOCKS` | `false` | Usa as APIs reais em vez dos mocks |
+| `VITE_CLOUDINARY_CLOUD_NAME` | conta do Cloudinary | Envio das fotos das ocorrências (não é segredo) |
+| `VITE_CLOUDINARY_PRESET_OCORRENCIA` | preset sem assinatura | Idem |
 
-Cadastre em **Settings → Environment Variables**, com o nome que o código do
-Website usa (`VITE_API_URL` e equivalentes).
+## Como o navegador chega ao backend
 
-> **Se o Elastic IP mudar** (por exemplo, ao recriar o cluster do zero), atualize
-> essas variáveis na Vercel e faça um novo deploy. Como o valor é gravado no
-> build, só mudar a variável não basta.
+O navegador chama caminhos relativos (`/api`, `/chat-api`, `/ranking-api`) e o
+`vercel.json` do Website os repassa por *rewrite* ao backend no cluster. Assim o
+site, em HTTPS, não fala direto com endereços HTTP e não há problema de CORS.
+
+| Prefixo | Destino |
+|---|---|
+| `/api/*` | `api` (`https://api.qa.<SSH_HOST>.sslip.io`) |
+| `/chat-api/*` | `chatbot` (`https://chat.qa.<SSH_HOST>.sslip.io`) |
+| `/ranking-api/*` | `api-redis` (`https://ranking.qa.<SSH_HOST>.sslip.io`) |
+
+> O `vercel.json` hoje aponta para o backend de **QA** em todos os deployments,
+> inclusive em `main`. Para a produção usar o backend de produção, é preciso
+> ajustar os destinos (por exemplo, trocar o arquivo na promoção para `main`).
+
+> **Se o Elastic IP mudar** (por exemplo, ao recriar o cluster do zero), troque o
+> IP nos destinos do `vercel.json` e faça um novo deploy.
+
+As fotos não passam pelo cluster: o navegador envia direto ao Cloudinary e a
+`api` guarda só a URL.
 
 ## Voltar uma versão
 

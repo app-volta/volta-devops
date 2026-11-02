@@ -91,7 +91,6 @@ jobs:
 
           IMAGE_TAG="${ENVIRONMENT}-${SHORT_SHA}"
 
-          # Tag imutável (usada no deploy) + tag móvel do ambiente (conveniência)
           TAGS="${IMAGE}:${IMAGE_TAG},${IMAGE}:${ENVIRONMENT}"
 
           {

@@ -36,7 +36,8 @@ Código → CI → imagem no GHCR (<ambiente>-<sha>) → aviso ao DevOps
 | Banco relacional | Postgres no Neon, com uma branch por ambiente |
 | Banco de documentos | MongoDB Atlas (memória das conversas do chatbot) |
 | Cache / ranking | Redis dentro do cluster (usado pela `api-redis`) |
-| Fotos | S3, com URL assinada pela API |
+| Vetores (RAG) | Qdrant, usado pelo chatbot |
+| Fotos | Cloudinary: o cliente envia direto e a API guarda só a URL |
 | Website | Vercel |
 
 ## Por onde começar

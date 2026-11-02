@@ -1,14 +1,5 @@
 name: Reusable - Deploy no k3s
 
-# Implanta uma imagem já publicada no GHCR dentro do cluster k3s.
-#
-# Fluxo:
-#   1. kustomize edit set image  -> prepara a tag e o host no runner
-#   2. scp dos manifestos        -> leva o overlay desta execução para a instância
-#   3. kubectl apply -k          -> aplica
-#   4. kubectl rollout status    -> só retorna quando a readiness probe passa
-#   5. smoke test pelo ingress   -> valida o caminho completo (Traefik -> pod)
-
 on:
   workflow_call:
     inputs:
@@ -57,7 +48,6 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
 
-    # Um deploy por ambiente de cada vez; não cancele uma alteração em andamento.
     concurrency:
       group: k3s-deploy-${{ inputs.environment }}
       cancel-in-progress: false
@@ -153,7 +143,6 @@ jobs:
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
 
-          # A instância pode ter sido recriada; aceitar a chave de host nova.
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
           if ! ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o ConnectTimeout=10 \
@@ -164,8 +153,6 @@ jobs:
 
       - name: Instalar kustomize
         run: |
-          # Os runners hospedados pelo GitHub podem já trazer o binário.
-          # O instalador oficial falha se tentar sobrescrevê-lo.
           if ! command -v kustomize >/dev/null 2>&1; then
             curl -sfL https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh \
               | bash -s -- 5.4.3 /usr/local/bin
@@ -294,8 +281,6 @@ jobs:
                kubectl -n volta-qa wait --for=condition=Ready certificate/volta-qa-tls --timeout=300s'
           fi
 
-          # Em QA o Deployment nasce com replicas 0. Nesse caso não há rollout
-          # para esperar: a imagem fica registrada e sobe quando alguém escalar.
           REPLICAS=$(ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "ec2-user@${SSH_HOST}" \
             "kubectl -n ${NAMESPACE} get deployment/${SERVICE} -o jsonpath='{.spec.replicas}'")
 
@@ -305,8 +290,6 @@ jobs:
             exit 0
           fi
 
-          # rollout status só retorna sucesso quando a readiness probe passa —
-          # é a verificação real de que a aplicação subiu, não só o container.
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "ec2-user@${SSH_HOST}" \
             "kubectl -n ${NAMESPACE} rollout status deployment/${SERVICE} --timeout=${TIMEOUT}"
 

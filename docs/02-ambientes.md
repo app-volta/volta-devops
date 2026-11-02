@@ -15,6 +15,8 @@ O Volta tem dois ambientes. Os dois rodam no **mesmo cluster**, separados por
 | Tag da imagem | `qa-<sha>` | `prod-<sha>` |
 | Postgres (Neon) | branch `qa` | branch `prod` |
 | MongoDB (Atlas) | banco `volta_qa` | banco `volta_prod` |
+| Redis (Redis Cloud) | Banco/credenciais próprios | Banco/credenciais próprios |
+| Fotos (Cloudinary) | Mesma conta | Mesma conta |
 | Website (Vercel) | Preview | Production |
 | Réplicas | **0 por padrão** (liga sob demanda) | 1 |
 | Nível de log | `DEBUG` | `INFO` / `WARN` |
@@ -62,7 +64,6 @@ kubernetes/
 │   ├── api/
 │   ├── api-redis/
 │   ├── chatbot/
-│   ├── redis/            # Redis de apoio da api-redis (sempre 1 réplica)
 │   └── ingress.yaml
 └── overlays/             # só o que muda em cada ambiente
     ├── qa/               # réplicas=0, HTTPS, logs DEBUG
@@ -93,8 +94,7 @@ kubectl -n volta-qa scale deployment/api-redis --replicas=0
 kubectl -n volta-qa scale deployment/chatbot --replicas=0
 ```
 
-> O deploy seguinte reaplica `replicas=0` em QA. Isso é intencional. O `redis`
-> fica sempre ligado (~64 Mi), para não ser esquecido ao subir a `api-redis`.
+> O deploy seguinte reaplica `replicas=0` em QA. Isso é intencional.
 >
 > Para conferir o consumo real de memória antes de ligar mais serviços:
 > `kubectl top pods -A` (a t3.medium tem 4 GB para QA, produção e k3s).

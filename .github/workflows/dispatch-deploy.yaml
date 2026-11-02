@@ -1,14 +1,5 @@
 name: Deploy
 
-# Ponto de entrada do deploy. Dois gatilhos:
-#
-#   1. repository_dispatch — automático. Os repositórios de aplicação disparam
-#      logo depois de publicar a imagem no GHCR (veja
-#      reusable-docker-build-push.yaml no repositório de origem).
-#
-#   2. workflow_dispatch — manual. Para reimplantar uma tag antiga sem precisar
-#      de rebuild: é o caminho de rollback pela interface do GitHub.
-
 on:
   repository_dispatch:
     types: [deploy]
@@ -54,16 +45,13 @@ jobs:
       - name: Normalizar a origem do gatilho
         id: payload
         env:
-          # repository_dispatch
           D_SERVICE: ${{ github.event.client_payload.service }}
           D_ENV: ${{ github.event.client_payload.env }}
           D_TAG: ${{ github.event.client_payload.tag }}
-          # workflow_dispatch
           W_SERVICE: ${{ inputs.service }}
           W_ENV: ${{ inputs.environment }}
           W_TAG: ${{ inputs.image-tag }}
           W_QA_SMOKE: ${{ inputs.qa-smoke }}
-          # comum
           OWNER: ${{ github.repository_owner }}
         run: |
           if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
@@ -74,9 +62,6 @@ jobs:
             QA_SMOKE="$W_QA_SMOKE"
           fi
 
-          # --- Validação do payload -------------------------------------------
-          # O dispatch vem de fora deste repositório: nada do que ele manda pode
-          # ser usado sem conferir.
           case "$SERVICE" in
             api|api-redis|chatbot) ;;
             *) echo "::error::Serviço inválido: '${SERVICE}'. Aceitos: api, api-redis, chatbot."; exit 1 ;;

@@ -1,8 +1,3 @@
-# Configuração NÃO sensível do ambiente de QA.
-#
-# Senha de banco, chave de LLM e JWT_SECRET NÃO entram aqui — eles vivem em
-# Secrets criados manualmente no cluster (`kubectl create secret`), porque este
-# arquivo é versionado em repositório público.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -21,8 +16,6 @@ metadata:
 data:
   SPRING_PROFILES_ACTIVE: "qa"
   SERVER_PORT: "8081"
-  REDIS_HOST: "redis"
-  REDIS_PORT: "6379"
   VOLTA_API_URL: "http://api:8080"
   LOGGING_LEVEL_ROOT: "INFO"
   LOGGING_LEVEL_COM_VOLTA: "DEBUG"
