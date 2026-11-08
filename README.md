@@ -35,7 +35,7 @@ Código → CI → imagem no GHCR (<ambiente>-<sha>) → aviso ao DevOps
 | Entrada de tráfego | Traefik (já vem no k3s) + `sslip.io` |
 | Banco relacional | Postgres no Neon, com uma branch por ambiente |
 | Banco de documentos | MongoDB Atlas (memória das conversas do chatbot) |
-| Cache / ranking | Redis dentro do cluster (usado pela `api-redis`) |
+| Cache / ranking | Redis Cloud |
 | Vetores (RAG) | Qdrant, usado pelo chatbot |
 | Fotos | Cloudinary: o cliente envia direto e a API guarda só a URL |
 | Website | Vercel |
